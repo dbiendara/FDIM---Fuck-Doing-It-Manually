@@ -11,7 +11,10 @@ import {
   X,
   ExternalLink,
   RefreshCw,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
+import { getFdimExpansion, saveUserProfanityPreference } from '../utils/branding';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -36,6 +39,22 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
 
   if (!isOpen) return null;
+
+  const handleToggleProfanity = async () => {
+    const nextVal = currentUser.showProfanity === false ? true : false;
+    saveUserProfanityPreference(currentUser.id, nextVal);
+    const updatedUser = { ...currentUser, showProfanity: nextVal };
+    onUserChanged(updatedUser);
+    try {
+      await fetch('/api/auth/preferences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ showProfanity: nextVal }),
+      });
+    } catch (err) {
+      console.warn('Failed to sync profanity preference to backend:', err);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -103,6 +122,50 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               Role: {currentUser.role} • {currentUser.domain || 'Domain Member'}
             </span>
           </div>
+        </div>
+
+        {/* Per-User Profanity Configuration Switch */}
+        <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 mb-5 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  currentUser.showProfanity !== false ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'
+                }`}
+              />
+              <span className="text-xs font-bold text-white">Technician Acronym Setting</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleProfanity}
+              className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors focus:outline-none ${
+                currentUser.showProfanity !== false ? 'bg-amber-600' : 'bg-emerald-600'
+              }`}
+              title="Toggle uncensored vs corporate safe-for-work phrasing"
+            >
+              <span
+                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                  currentUser.showProfanity !== false ? 'translate-x-5' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between text-xs pt-0.5">
+            <span className="text-slate-400 text-[11px]">Show word &quot;fuck&quot; in FDIM:</span>
+            <span
+              className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                currentUser.showProfanity !== false
+                  ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                  : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+              }`}
+            >
+              {currentUser.showProfanity !== false ? '⚡ Fuck Doing It Manually' : '🛡️ Forget Doing It Manually'}
+            </span>
+          </div>
+          <p className="text-[10px] text-slate-500 leading-tight">
+            Per-user technician setting. Disable to switch to Corporate Safe-For-Work (SFW) mode for client presentations and audits.
+          </p>
         </div>
 
         {/* Auth Provider Selector */}

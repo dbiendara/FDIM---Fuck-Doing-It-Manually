@@ -152,6 +152,14 @@ export interface DeploymentRecord {
   technicianName: string;
 }
 
+export interface CorporateColorsConfig {
+  primaryColor?: string; // Hex color code, e.g. "#06b6d4" or "#0284c7"
+  secondaryColor?: string; // Hex color code, e.g. "#2563eb" or "#10b981"
+  companyBrandName?: string; // e.g. "FDIM Enterprise Workstation Suite"
+  themeMode?: 'dark-cyan' | 'dark-blue' | 'dark-emerald' | 'dark-indigo' | 'dark-purple' | 'custom';
+  customCssVarEnabled?: boolean;
+}
+
 export interface AppSettings {
   defaultGlobalDomain: string;
   authMode: 'local' | 'active_directory' | 'keycloak';
@@ -190,6 +198,7 @@ export interface AppSettings {
     bootDelayMinutes: number; // e.g. 5
     serverUrl: string; // e.g. "http://fdim.corp.internal:3000"
   };
+  corporateColors?: CorporateColorsConfig;
 }
 
 export interface ADComputer {

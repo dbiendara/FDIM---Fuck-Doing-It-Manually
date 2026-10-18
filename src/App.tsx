@@ -27,6 +27,8 @@ import { LoginModal } from './components/LoginModal';
 import { ADComputersView } from './components/ADComputersView';
 import { ClientAgentQueueView } from './components/ClientAgentQueueView';
 import { loadWizardDraft } from './utils/wizardAutoSave';
+import { loadUserProfanityPreference, saveUserProfanityPreference } from './utils/branding';
+import { applyCorporateTheme, loadSavedCorporateColors } from './utils/theme';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'wizard' | 'quick-deploy' | 'ad-computers' | 'agent' | 'runner' | 'library' | 'ai-detective' | 'history' | 'customers'>('wizard');
@@ -76,14 +78,18 @@ export default function App() {
     },
   });
 
-  const [currentUser, setCurrentUser] = useState<AuthUser>({
-    id: 'usr-admin',
-    username: 'admin',
-    displayName: 'FDIM Domain Administrator',
-    domain: 'CORP',
-    role: 'Administrator',
-    authProvider: 'local',
-    avatarInitials: 'DA',
+  const [currentUser, setCurrentUser] = useState<AuthUser>(() => {
+    const profanityPref = loadUserProfanityPreference('usr-admin', true);
+    return {
+      id: 'usr-admin',
+      username: 'admin',
+      displayName: 'FDIM Domain Administrator',
+      domain: 'CORP',
+      role: 'Administrator',
+      authProvider: 'local',
+      avatarInitials: 'DA',
+      showProfanity: profanityPref,
+    };
   });
 
   // Modals state
@@ -144,6 +150,28 @@ export default function App() {
   const [isSystemConfigManagerOpen, setIsSystemConfigManagerOpen] = useState(false);
   const [activeAuditRecord, setActiveAuditRecord] = useState<DeploymentRecord | null>(null);
 
+  // Mount theme initialization from saved local storage
+  useEffect(() => {
+    const savedColors = loadSavedCorporateColors();
+    applyCorporateTheme(savedColors);
+  }, []);
+
+  const handleToggleProfanity = async () => {
+    const nextVal = currentUser.showProfanity === false ? true : false;
+    saveUserProfanityPreference(currentUser.id, nextVal);
+    const updatedUser = { ...currentUser, showProfanity: nextVal };
+    setCurrentUser(updatedUser);
+    try {
+      await fetch('/api/auth/preferences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ showProfanity: nextVal }),
+      });
+    } catch (err) {
+      console.warn('Failed to sync profanity preference:', err);
+    }
+  };
+
   // Initial data loading
   useEffect(() => {
     Promise.all([
@@ -159,8 +187,16 @@ export default function App() {
         setCustomers(custs || []);
         setSystemSwitches(switches || []);
         setDeployments(deps || []);
-        if (sets) setAppSettings(sets);
-        if (auth?.user) setCurrentUser(auth.user);
+        if (sets) {
+          setAppSettings(sets);
+          if (sets.corporateColors) {
+            applyCorporateTheme(sets.corporateColors);
+          }
+        }
+        if (auth?.user) {
+          const userPref = loadUserProfanityPreference(auth.user.id, auth.user.showProfanity !== false);
+          setCurrentUser({ ...auth.user, showProfanity: userPref });
+        }
 
         // Check if there is an active draft saved in local storage
         const currentSavedDraft = loadWizardDraft();
@@ -488,8 +524,10 @@ export default function App() {
         selectedCustomerName={activeCustomer.companyName}
         isDeploying={isDeploying}
         currentUser={currentUser}
+        appSettings={appSettings}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenLogin={() => setIsLoginModalOpen(true)}
+        onToggleProfanity={handleToggleProfanity}
       />
 
       {/* Main Content Body */}
@@ -526,6 +564,7 @@ export default function App() {
             onOpenManualPackageModal={() => setActiveTab('library')}
             onStartDeployment={handleStartDeployment}
             onOpenScriptModal={() => setIsScriptModalOpen(true)}
+            showProfanity={currentUser.showProfanity !== false}
           />
         )}
 
@@ -580,6 +619,7 @@ export default function App() {
             userLogonStaging={userLogonStaging}
             onCompleteDeployment={handleCompleteDeployment}
             onOpenAuditModal={() => setIsAuditModalOpen(true)}
+            showProfanity={currentUser.showProfanity !== false}
           />
         )}
 
@@ -617,6 +657,7 @@ export default function App() {
             deployments={deployments}
             packages={packages}
             onViewCertificate={handleViewCertificate}
+            showProfanity={currentUser.showProfanity !== false}
           />
         )}
       </main>
@@ -647,6 +688,7 @@ export default function App() {
         stagedDrives={stagedDrives}
         stagedPrinters={stagedPrinters}
         userLogonStaging={userLogonStaging}
+        showProfanity={currentUser.showProfanity !== false}
       />
 
       {/* Workstation Handover Audit Certificate Modal */}
@@ -655,13 +697,21 @@ export default function App() {
         onClose={() => setIsAuditModalOpen(false)}
         record={activeAuditRecord || deployments[0] || null}
         packages={packages}
+        showProfanity={currentUser.showProfanity !== false}
       />
 
       {/* Infrastructure & Administration Settings Modal */}
       <SettingsModal
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
-        onSettingsUpdated={(newSets) => setAppSettings(newSets)}
+        onSettingsUpdated={(newSets) => {
+          setAppSettings(newSets);
+          if (newSets.corporateColors) {
+            applyCorporateTheme(newSets.corporateColors);
+          }
+        }}
+        showProfanity={currentUser.showProfanity !== false}
+        onToggleProfanity={handleToggleProfanity}
       />
 
       {/* Technician Login & AD Auth Modal */}

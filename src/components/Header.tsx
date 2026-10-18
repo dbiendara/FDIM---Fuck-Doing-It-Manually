@@ -16,7 +16,9 @@ import {
   Radio,
   Network,
 } from 'lucide-react';
-import { AuthUser } from '../types';
+import { AuthUser, AppSettings } from '../types';
+import { getFdimExpansion } from '../utils/branding';
+import { DEFAULT_CORPORATE_COLORS } from '../utils/theme';
 
 interface HeaderProps {
   activeTab: 'wizard' | 'quick-deploy' | 'ad-computers' | 'agent' | 'runner' | 'library' | 'ai-detective' | 'history' | 'customers';
@@ -25,8 +27,10 @@ interface HeaderProps {
   selectedCustomerName: string;
   isDeploying: boolean;
   currentUser?: AuthUser;
+  appSettings?: AppSettings;
   onOpenSettings?: () => void;
   onOpenLogin?: () => void;
+  onToggleProfanity?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -36,29 +40,63 @@ export const Header: React.FC<HeaderProps> = ({
   selectedCustomerName,
   isDeploying,
   currentUser,
+  appSettings,
   onOpenSettings,
   onOpenLogin,
+  onToggleProfanity,
 }) => {
+  const primaryColor = appSettings?.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor;
+  const secondaryColor = appSettings?.corporateColors?.secondaryColor || DEFAULT_CORPORATE_COLORS.secondaryColor;
+  const brandName = appSettings?.corporateColors?.companyBrandName || 'FDIM Suite';
+  const showProfanity = currentUser?.showProfanity !== false;
+
   return (
     <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40 backdrop-blur-md bg-slate-900/90">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Logo & Brand */}
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 text-white font-bold">
+            <div
+              className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg text-white font-bold transition-all"
+              style={{
+                background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`,
+                boxShadow: `0 10px 20px -5px ${primaryColor}40`,
+              }}
+            >
               <Cpu className="w-6 h-6" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <span className="text-white font-extrabold text-xl tracking-tight bg-gradient-to-r from-cyan-400 via-teal-300 to-blue-400 bg-clip-text text-transparent">
+                <span
+                  className="font-extrabold text-xl tracking-tight transition-colors"
+                  style={{
+                    background: `linear-gradient(to right, ${primaryColor}, ${secondaryColor})`,
+                    WebkitBackgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                  }}
+                >
                   FDIM
                 </span>
-                <span className="text-amber-400 font-semibold text-xs px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-800/60 uppercase tracking-wider font-mono">
-                  Fuck Doing It Manually
-                </span>
+                <button
+                  type="button"
+                  onClick={onToggleProfanity}
+                  title={
+                    showProfanity
+                      ? "Click to switch to Corporate Safe-For-Work mode ('Forget Doing It Manually')"
+                      : "Click to switch to Uncensored mode ('Fuck Doing It Manually')"
+                  }
+                  className={`text-xs px-2.5 py-0.5 rounded-full font-semibold font-mono tracking-wider transition-all flex items-center space-x-1.5 cursor-pointer hover:scale-105 select-none ${
+                    showProfanity
+                      ? 'text-amber-300 bg-amber-950/80 border border-amber-800/80 hover:bg-amber-900/60'
+                      : 'text-emerald-300 bg-emerald-950/80 border border-emerald-800/80 hover:bg-emerald-900/60'
+                  }`}
+                >
+                  <span>{getFdimExpansion(showProfanity)}</span>
+                  <span className="text-[11px]">{showProfanity ? '⚡' : '🛡️'}</span>
+                </button>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                Zero-Touch Workstation Provisioning & Silent UNC Installer Suite
+                {brandName ? `${brandName} • ` : ''}Zero-Touch Workstation Provisioning & Silent UNC Installer Suite
               </p>
             </div>
           </div>

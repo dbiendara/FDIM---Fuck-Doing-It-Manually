@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { DeploymentRecord, SoftwarePackage } from '../types';
+import { getFdimExpansion } from '../utils/branding';
 import {
   History,
   CheckCircle2,
@@ -16,12 +17,14 @@ interface DeploymentHistoryProps {
   deployments: DeploymentRecord[];
   packages: SoftwarePackage[];
   onViewCertificate: (record: DeploymentRecord) => void;
+  showProfanity?: boolean;
 }
 
 export const DeploymentHistory: React.FC<DeploymentHistoryProps> = ({
   deployments,
   packages,
   onViewCertificate,
+  showProfanity = true,
 }) => {
   const [search, setSearch] = useState('');
 
@@ -43,7 +46,7 @@ export const DeploymentHistory: React.FC<DeploymentHistoryProps> = ({
           <h1 className="text-xl font-bold text-white">FDIM Workstation Provisioning Audit Register</h1>
         </div>
         <p className="text-xs text-slate-400">
-          Historical records of configured domain workstations, customer assignments, and installed software ("Fuck Doing It Manually")
+          Historical records of configured domain workstations, customer assignments, and installed software (&quot;{getFdimExpansion(showProfanity !== false)}&quot;)
         </p>
       </div>
 

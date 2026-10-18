@@ -35,6 +35,7 @@ import {
   UserCheck,
   Radio,
 } from 'lucide-react';
+import { getFdimExpansion } from '../utils/branding';
 
 interface LiveRunnerProps {
   isDeploying: boolean;
@@ -53,6 +54,7 @@ interface LiveRunnerProps {
   userLogonStaging?: UserLogonStagingConfig;
   onCompleteDeployment: (record: DeploymentRecord) => void;
   onOpenAuditModal: () => void;
+  showProfanity?: boolean;
 }
 
 interface StepItem {
@@ -81,6 +83,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
   userLogonStaging = { enabled: true },
   onCompleteDeployment,
   onOpenAuditModal,
+  showProfanity = true,
 }) => {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [steps, setSteps] = useState<StepItem[]>([]);
@@ -597,7 +600,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
           {/* Console Container */}
           <div className="flex-1 bg-slate-950 border border-slate-850 rounded-xl p-4 font-mono text-xs overflow-y-auto leading-relaxed space-y-1.5 selection:bg-cyan-600 selection:text-white">
             <div className="text-slate-500 pb-1 border-b border-slate-850">
-              # FDIM (Fuck Doing It Manually) Deployment Session: {customer.companyName} [{machineName || '$env:COMPUTERNAME'}]
+              # FDIM ({getFdimExpansion(showProfanity !== false)}) Deployment Session: {customer.companyName} [{machineName || '$env:COMPUTERNAME'}]
             </div>
 
             {filteredLogs.map((log, index) => (

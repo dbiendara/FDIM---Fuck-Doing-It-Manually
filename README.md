@@ -77,6 +77,22 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 - **Batch Selection**: Select target machines, domain, and one or more UNC / Winget packages.
 - **Instant PowerShell Script Generation & Execution**: Generate hardened unattended install scripts or trigger deployment instantly.
 
+### 🎨 Corporate Brand Colors & Portal Appearance
+- **Custom Corporate Color Schemes**: Configure custom primary and secondary brand accent colors to match your organization's or MSP's corporate identity.
+- **1-Click Presets & Custom Pickers**: Choose from 8 pre-tuned palettes (**Cyber Cyan**, **Enterprise Blue**, **MSP Emerald**, **Royal Indigo**, **Executive Purple**, **Amber Glow**, **Crimson Ops**, **Titanium Slate**) or specify custom HEX codes and HTML color pickers.
+- **Dynamic CSS Variable Theming**: Injects `--brand-primary` and `--brand-secondary` custom properties live across action buttons, active tab indicators, glowing badges, and banner gradients.
+- **Corporate Organization Title**: Customize the portal brand name displayed in headers and compliance handover reports (e.g., `FDIM Enterprise Suite`, `Acme Managed Workplace`).
+- **Live Real-Time Theme Preview**: Preview your color palette, buttons, badges, and certificates instantly inside the Settings modal before saving to persistent SQLite storage.
+
+### 🛡️ Per-User Acronym & Safe-For-Work (SFW) Profanity Switch
+- **Granular Per-Technician Preference**: Technicians and system administrators can individually choose whether they want to see the original IT humor acronym or a clean corporate safe-for-work phrasing.
+- **Two Distinct Operating Modes**:
+  - **⚡ Uncensored Mode**: Displays **"Fuck Doing It Manually"** across application banners, technician cards, and script transcripts.
+  - **🛡️ Corporate Safe-For-Work (SFW) Mode**: Displays **"Forget Doing It Manually"** across all headers, certificate handovers, and generated PowerShell scripts—safe for client presentations, management reviews, and external compliance audits.
+- **Instant Header Quick-Toggle**: Click the acronym badge in the top navigation bar to toggle phrasing on the fly with live visual feedback.
+- **Full Scope Coverage**: Phrasing preferences automatically synchronize across the top navigation bar, New PC Provisioning Wizard banner, Script Generator modal, Live Deployment Runner session logs, Audit Handover Compliance certificates, and generated unattended PowerShell master scripts.
+- **Persistent Retention**: Saved per technician in both browser `localStorage` and backend SQLite database (`users` table and `/api/auth/preferences`).
+
 ### 🔐 Enterprise Authentication & Role Management
 - **Multi-Mode Authentication Engine**:
   - **Local Accounts**: Built-in technician credentials with role-based access control (RBAC).

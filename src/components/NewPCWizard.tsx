@@ -55,6 +55,7 @@ import {
   saveWizardDraft,
   formatTimeAgo,
 } from '../utils/wizardAutoSave';
+import { getFdimExpansion } from '../utils/branding';
 
 interface NewPCWizardProps {
   packages: SoftwarePackage[];
@@ -87,6 +88,7 @@ interface NewPCWizardProps {
   onOpenManualPackageModal: () => void;
   onStartDeployment: () => void;
   onOpenScriptModal: () => void;
+  showProfanity?: boolean;
 }
 
 export const NewPCWizard: React.FC<NewPCWizardProps> = ({
@@ -120,6 +122,7 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
   onOpenManualPackageModal,
   onStartDeployment,
   onOpenScriptModal,
+  showProfanity = true,
 }) => {
   const [packageSearch, setPackageSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
@@ -528,8 +531,14 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight flex items-center space-x-2.5">
               <span>FDIM Workstation Provisioning</span>
-              <span className="text-xs px-2 py-0.5 rounded bg-amber-950/80 border border-amber-800 text-amber-300 font-mono font-medium">
-                Fuck Doing It Manually
+              <span
+                className={`text-xs px-2 py-0.5 rounded font-mono font-medium ${
+                  showProfanity !== false
+                    ? 'bg-amber-950/80 border border-amber-800 text-amber-300'
+                    : 'bg-emerald-950/80 border border-emerald-800 text-emerald-300'
+                }`}
+              >
+                {getFdimExpansion(showProfanity !== false)}
               </span>
             </h1>
             <p className="mt-1 text-slate-300 text-xs sm:text-sm">

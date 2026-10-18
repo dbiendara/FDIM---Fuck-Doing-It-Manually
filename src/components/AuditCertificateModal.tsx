@@ -1,5 +1,6 @@
 import React from 'react';
 import { DeploymentRecord, SoftwarePackage } from '../types';
+import { getFdimExpansion } from '../utils/branding';
 import {
   Award,
   CheckCircle2,
@@ -15,6 +16,7 @@ interface AuditCertificateModalProps {
   onClose: () => void;
   record: DeploymentRecord | null;
   packages: SoftwarePackage[];
+  showProfanity?: boolean;
 }
 
 export const AuditCertificateModal: React.FC<AuditCertificateModalProps> = ({
@@ -22,6 +24,7 @@ export const AuditCertificateModal: React.FC<AuditCertificateModalProps> = ({
   onClose,
   record,
   packages,
+  showProfanity = true,
 }) => {
   if (!isOpen || !record) return null;
 
@@ -68,8 +71,12 @@ export const AuditCertificateModal: React.FC<AuditCertificateModalProps> = ({
             <h2 className="text-2xl font-extrabold text-white tracking-tight">
               Workstation Provisioning Certificate
             </h2>
-            <p className="text-xs text-amber-300/90 mt-1 uppercase tracking-widest font-mono">
-              FDIM (Fuck Doing It Manually) Workstation Deployment Audit
+            <p
+              className={`text-xs mt-1 uppercase tracking-widest font-mono font-medium ${
+                showProfanity !== false ? 'text-amber-300/90' : 'text-emerald-300/90'
+              }`}
+            >
+              FDIM ({getFdimExpansion(showProfanity !== false)}) Workstation Deployment Audit
             </p>
           </div>
 

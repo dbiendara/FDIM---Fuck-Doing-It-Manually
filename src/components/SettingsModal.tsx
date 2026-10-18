@@ -23,20 +23,30 @@ import {
   Radio,
   RotateCcw,
   Box,
+  Palette,
+  Sparkles,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
+import { COLOR_PRESETS, DEFAULT_CORPORATE_COLORS, applyCorporateTheme } from '../utils/theme';
+import { getFdimExpansion } from '../utils/branding';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSettingsUpdated: (newSettings: AppSettings) => void;
+  showProfanity?: boolean;
+  onToggleProfanity?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   onSettingsUpdated,
+  showProfanity = true,
+  onToggleProfanity,
 }) => {
-  const [activeTab, setActiveTab] = useState<'general' | 'sqlite' | 'auth' | 'runner' | 'proxmox' | 'agent' | 'docker'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'branding' | 'sqlite' | 'auth' | 'runner' | 'proxmox' | 'agent' | 'docker'>('general');
   const [settings, setSettings] = useState<AppSettings>({
     defaultGlobalDomain: 'corp.internal.net',
     authMode: 'local',
@@ -75,6 +85,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       bootDelayMinutes: 5,
       serverUrl: 'http://fdim.corp.internal:3000',
     },
+    corporateColors: {
+      primaryColor: '#06b6d4',
+      secondaryColor: '#2563eb',
+      companyBrandName: 'FDIM Suite',
+      themeMode: 'dark-cyan',
+      customCssVarEnabled: true,
+    },
   });
 
   const [dbMetadata, setDbMetadata] = useState<any>(null);
@@ -92,7 +109,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (isOpen) {
       fetch('/api/settings')
         .then((r) => r.json())
-        .then((data) => setSettings(data))
+        .then((data) => {
+          setSettings(data);
+          if (data.corporateColors) {
+            applyCorporateTheme(data.corporateColors);
+          }
+        })
         .catch((err) => console.error('Error fetching settings:', err));
 
       fetch('/api/database/info')
@@ -101,6 +123,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         .catch((err) => console.error('Error fetching db metadata:', err));
     }
   }, [isOpen]);
+
+  const handleColorChange = (key: 'primaryColor' | 'secondaryColor' | 'companyBrandName', value: string) => {
+    const current = settings.corporateColors || DEFAULT_CORPORATE_COLORS;
+    const updated = {
+      ...current,
+      [key]: value,
+    };
+    setSettings((prev) => ({
+      ...prev,
+      corporateColors: updated,
+    }));
+    applyCorporateTheme(updated);
+  };
+
+  const handleApplyPreset = (preset: typeof COLOR_PRESETS[0]) => {
+    const current = settings.corporateColors || DEFAULT_CORPORATE_COLORS;
+    const updated = {
+      ...current,
+      primaryColor: preset.primary,
+      secondaryColor: preset.secondary,
+    };
+    setSettings((prev) => ({
+      ...prev,
+      corporateColors: updated,
+    }));
+    applyCorporateTheme(updated);
+  };
+
+  const handleResetColors = () => {
+    setSettings((prev) => ({
+      ...prev,
+      corporateColors: { ...DEFAULT_CORPORATE_COLORS },
+    }));
+    applyCorporateTheme(DEFAULT_CORPORATE_COLORS);
+  };
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -112,6 +169,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       });
       const updated = await res.json();
       setSettings(updated);
+      if (updated.corporateColors) {
+        applyCorporateTheme(updated.corporateColors);
+      }
       onSettingsUpdated(updated);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2500);
@@ -187,6 +247,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             <Globe className="w-4 h-4" />
             <span>Global Domain Defaults</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('branding')}
+            className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+              activeTab === 'branding'
+                ? 'border-cyan-500 text-cyan-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Palette className="w-4 h-4 text-pink-400" />
+            <span>Corporate Colors</span>
           </button>
 
           <button
@@ -299,6 +371,371 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <p>• Pre-fills the <strong>Target Domain</strong> field in the New PC Setup Wizard.</p>
                 <p>• Pre-fills newly created customer profiles in the <strong>Customer Profiles</strong> manager.</p>
                 <p>• Resolves domain membership check for zero-touch silent UNC installations.</p>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: CORPORATE COLORS & BRANDING */}
+          {activeTab === 'branding' && (
+            <div className="space-y-6">
+              {/* Top Overview */}
+              <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-pink-950 border border-pink-800 text-pink-400 flex items-center justify-center font-bold">
+                      <Palette className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white">Corporate Brand Colors & Theme Scheme</h3>
+                      <p className="text-xs text-slate-400">
+                        Customize primary and secondary corporate colors, portal brand title, and technician profanity settings.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResetColors}
+                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs text-slate-300 hover:text-white transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset Defaults</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Presets Grid */}
+              <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center space-x-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-pink-400" />
+                    <span>Corporate Color Presets (1-Click Apply)</span>
+                  </h4>
+                  <span className="text-[10px] text-slate-500 font-mono">Live Theme Preview</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {COLOR_PRESETS.map((preset) => {
+                    const isSelected =
+                      (settings.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor).toLowerCase() ===
+                        preset.primary.toLowerCase() &&
+                      (settings.corporateColors?.secondaryColor || DEFAULT_CORPORATE_COLORS.secondaryColor).toLowerCase() ===
+                        preset.secondary.toLowerCase();
+                    return (
+                      <button
+                        key={preset.name}
+                        type="button"
+                        onClick={() => handleApplyPreset(preset)}
+                        className={`p-3 rounded-xl border text-left transition-all relative overflow-hidden group ${
+                          isSelected
+                            ? 'bg-slate-900 border-cyan-500 shadow-md shadow-cyan-500/20'
+                            : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2 mb-2">
+                          <span
+                            className="w-4 h-4 rounded-full border border-black/40 shadow-inner"
+                            style={{ backgroundColor: preset.primary }}
+                          />
+                          <span
+                            className="w-4 h-4 rounded-full border border-black/40 shadow-inner -ml-1"
+                            style={{ backgroundColor: preset.secondary }}
+                          />
+                          {isSelected && (
+                            <span className="ml-auto w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                          )}
+                        </div>
+                        <strong className="text-xs text-white block font-medium truncate">{preset.name}</strong>
+                        <span className="text-[10px] text-slate-400 block truncate">{preset.description}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Custom Color Pickers */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Primary Color */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-200">
+                      Primary Corporate Brand Color
+                    </label>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      Buttons, tabs, active borders
+                    </span>
+                  </div>
+
+                  <div className="flex items-center space-x-3">
+                    <div className="relative">
+                      <input
+                        type="color"
+                        value={settings.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor}
+                        onChange={(e) => handleColorChange('primaryColor', e.target.value)}
+                        className="w-12 h-10 rounded-xl cursor-pointer bg-slate-900 border border-slate-700 p-1"
+                        title="Pick corporate primary color"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <input
+                        type="text"
+                        value={settings.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor}
+                        onChange={(e) => handleColorChange('primaryColor', e.target.value)}
+                        placeholder="#06b6d4"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white font-mono uppercase focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Used as the focal branding tint for action buttons, progress bars, active step badges, and terminal highlights.
+                  </p>
+                </div>
+
+                {/* Secondary Accent Color */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-200">
+                      Secondary Corporate Accent Color
+                    </label>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      Gradients, tags, glows
+                    </span>
+                  </div>
+
+                  <div className="flex items-center space-x-3">
+                    <div className="relative">
+                      <input
+                        type="color"
+                        value={settings.corporateColors?.secondaryColor || DEFAULT_CORPORATE_COLORS.secondaryColor}
+                        onChange={(e) => handleColorChange('secondaryColor', e.target.value)}
+                        className="w-12 h-10 rounded-xl cursor-pointer bg-slate-900 border border-slate-700 p-1"
+                        title="Pick corporate secondary color"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <input
+                        type="text"
+                        value={settings.corporateColors?.secondaryColor || DEFAULT_CORPORATE_COLORS.secondaryColor}
+                        onChange={(e) => handleColorChange('secondaryColor', e.target.value)}
+                        placeholder="#2563eb"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white font-mono uppercase focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Used in dual-tone brand gradients, secondary cards, background glows, and elevated badges.
+                  </p>
+                </div>
+              </div>
+
+              {/* Portal Brand Title */}
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+                <label className="block text-xs font-bold text-slate-200">
+                  Corporate Portal / Brand Name
+                </label>
+                <input
+                  type="text"
+                  value={settings.corporateColors?.companyBrandName || 'FDIM Suite'}
+                  onChange={(e) => handleColorChange('companyBrandName', e.target.value)}
+                  placeholder="e.g. FDIM Suite, Acme IT Provisioning, Contoso Managed Services"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                />
+                <p className="text-[11px] text-slate-400">
+                  Custom organization name displayed in the top application header and compliance reports.
+                </p>
+              </div>
+
+              {/* Profanity Switch for User */}
+              <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-amber-950/80 border border-amber-800 text-amber-300 flex items-center justify-center font-bold">
+                      {showProfanity ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4 text-emerald-400" />}
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-white flex items-center space-x-2">
+                        <span>Acronym Phrasing & Profanity Configuration</span>
+                        <span
+                          className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${
+                            showProfanity
+                              ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                              : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                          }`}
+                        >
+                          {showProfanity ? 'Uncensored Phrasing' : 'Corporate SFW Mode'}
+                        </span>
+                      </h4>
+                      <p className="text-xs text-slate-400">
+                        Choose whether the acronym displays the word &quot;fuck&quot; or the safe-for-work corporate version.
+                      </p>
+                    </div>
+                  </div>
+
+                  {onToggleProfanity && (
+                    <button
+                      type="button"
+                      onClick={onToggleProfanity}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                        showProfanity ? 'bg-amber-600' : 'bg-emerald-600'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          showProfanity ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 text-xs">
+                  <div
+                    onClick={() => {
+                      if (!showProfanity && onToggleProfanity) onToggleProfanity();
+                    }}
+                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                      showProfanity
+                        ? 'bg-amber-950/40 border-amber-700/80 text-amber-200'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <strong className="text-xs font-bold text-white">⚡ Uncensored Mode</strong>
+                      {showProfanity && <span className="text-[10px] text-amber-400 font-mono">ACTIVE</span>}
+                    </div>
+                    <p className="text-[11px] text-amber-300/80 font-mono mb-1 font-semibold">
+                      &quot;Fuck Doing It Manually&quot;
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      Original IT sysadmin humor. Displayed across the top banner, script modals, and deployment transcripts.
+                    </p>
+                  </div>
+
+                  <div
+                    onClick={() => {
+                      if (showProfanity && onToggleProfanity) onToggleProfanity();
+                    }}
+                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                      !showProfanity
+                        ? 'bg-emerald-950/40 border-emerald-700/80 text-emerald-200'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <strong className="text-xs font-bold text-white">🛡️ Corporate Safe For Work (SFW)</strong>
+                      {!showProfanity && <span className="text-[10px] text-emerald-400 font-mono">ACTIVE</span>}
+                    </div>
+                    <p className="text-[11px] text-emerald-300/80 font-mono mb-1 font-semibold">
+                      &quot;Forget Doing It Manually&quot;
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      Polite, corporate-safe wording. Ideal for customer demonstrations, executive reviews, and formal compliance certificates.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Real-Time Preview Card */}
+              <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
+                    <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Real-Time Theme & Branding Preview</span>
+                  </h4>
+                  <span className="text-[10px] text-slate-500 font-mono">Live CSS Custom Properties</span>
+                </div>
+
+                <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-4">
+                  {/* Simulated Header */}
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div className="flex items-center space-x-3">
+                      <div
+                        className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold shadow-lg"
+                        style={{
+                          background: `linear-gradient(135deg, ${
+                            settings.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor
+                          }, ${
+                            settings.corporateColors?.secondaryColor || DEFAULT_CORPORATE_COLORS.secondaryColor
+                          })`,
+                        }}
+                      >
+                        <Cpu className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span
+                            className="font-extrabold text-base tracking-tight"
+                            style={{
+                              color: settings.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor,
+                            }}
+                          >
+                            FDIM
+                          </span>
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-medium ${
+                              showProfanity
+                                ? 'bg-amber-950/80 text-amber-300 border border-amber-800'
+                                : 'bg-emerald-950/80 text-emerald-300 border border-emerald-800'
+                            }`}
+                          >
+                            {getFdimExpansion(showProfanity)}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-400">
+                          {settings.corporateColors?.companyBrandName || 'FDIM Suite'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        style={{
+                          backgroundColor:
+                            settings.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor,
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-white text-xs font-bold shadow-sm"
+                      >
+                        Primary Action
+                      </button>
+                      <button
+                        type="button"
+                        style={{
+                          borderColor:
+                            settings.corporateColors?.secondaryColor || DEFAULT_CORPORATE_COLORS.secondaryColor,
+                          color:
+                            settings.corporateColors?.secondaryColor || DEFAULT_CORPORATE_COLORS.secondaryColor,
+                        }}
+                        className="px-3 py-1.5 rounded-lg border text-xs font-semibold bg-slate-950"
+                      >
+                        Secondary Pill
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Simulated Certificate Snippet */}
+                  <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs flex items-center justify-between">
+                    <div>
+                      <span className="text-slate-400 text-[10px] block font-mono">Workstation Audit Certificate</span>
+                      <strong className="text-white text-xs">
+                        FDIM ({getFdimExpansion(showProfanity)}) Compliance Record
+                      </strong>
+                    </div>
+                    <span
+                      className="px-2.5 py-1 rounded text-[11px] font-mono font-bold"
+                      style={{
+                        backgroundColor: `${
+                          settings.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor
+                        }22`,
+                        color:
+                          settings.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor,
+                        border: `1px solid ${
+                          settings.corporateColors?.primaryColor || DEFAULT_CORPORATE_COLORS.primaryColor
+                        }55`,
+                      }}
+                    >
+                      DOMAIN VERIFIED
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           )}

@@ -8,6 +8,7 @@ import {
   PrinterMapping,
   UserLogonStagingConfig,
 } from '../types';
+import { getFdimExpansion } from '../utils/branding';
 import {
   Terminal,
   Copy,
@@ -38,6 +39,7 @@ interface ScriptModalProps {
   stagedDrives?: NetworkDriveMapping[];
   stagedPrinters?: PrinterMapping[];
   userLogonStaging?: UserLogonStagingConfig;
+  showProfanity?: boolean;
 }
 
 export const ScriptModal: React.FC<ScriptModalProps> = ({
@@ -55,6 +57,7 @@ export const ScriptModal: React.FC<ScriptModalProps> = ({
   stagedDrives = [],
   stagedPrinters = [],
   userLogonStaging = { enabled: true },
+  showProfanity = true,
 }) => {
   const [scriptContent, setScriptContent] = useState('');
   const [copiedScript, setCopiedScript] = useState(false);
@@ -88,6 +91,7 @@ export const ScriptModal: React.FC<ScriptModalProps> = ({
         networkDrives: stagedDrives,
         printers: stagedPrinters,
         userLogonStaging,
+        showProfanity: showProfanity !== false,
       }),
     })
       .then((res) => res.json())
@@ -111,6 +115,7 @@ export const ScriptModal: React.FC<ScriptModalProps> = ({
     stagedDrives,
     stagedPrinters,
     userLogonStaging,
+    showProfanity,
   ]);
 
   if (!isOpen) return null;
@@ -153,8 +158,14 @@ export const ScriptModal: React.FC<ScriptModalProps> = ({
             <div>
               <h3 className="text-base font-bold text-white flex items-center space-x-2">
                 <span>FDIM Deploy-Workstation.ps1 Generator</span>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 font-mono">
-                  Fuck Doing It Manually
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded font-mono ${
+                    showProfanity !== false
+                      ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                      : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                  }`}
+                >
+                  {getFdimExpansion(showProfanity !== false)}
                 </span>
               </h3>
               <p className="text-xs text-slate-400">

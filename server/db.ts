@@ -166,6 +166,13 @@ export function seedInitialDataIfEmpty(
       bootDelayMinutes: 5,
       serverUrl: 'http://fdim.corp.internal:3000',
     },
+    corporateColors: {
+      primaryColor: '#06b6d4',
+      secondaryColor: '#2563eb',
+      companyBrandName: 'FDIM Suite',
+      themeMode: 'dark-cyan',
+      customCssVarEnabled: true,
+    },
   };
 
   const settingsRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('global') as { value: string } | undefined;
@@ -333,6 +340,13 @@ export function getAppSettings(): AppSettings {
       bootDelayMinutes: 5,
       serverUrl: 'http://fdim.corp.internal:3000',
     },
+    corporateColors: {
+      primaryColor: '#06b6d4',
+      secondaryColor: '#2563eb',
+      companyBrandName: 'FDIM Suite',
+      themeMode: 'dark-cyan',
+      customCssVarEnabled: true,
+    },
   };
 
   if (!row) {
@@ -348,6 +362,7 @@ export function getAppSettings(): AppSettings {
     runnerServiceAccount: { ...defaultSettings.runnerServiceAccount, ...(parsed.runnerServiceAccount || {}) },
     proxmoxConfig: { ...defaultSettings.proxmoxConfig, ...(parsed.proxmoxConfig || {}) },
     agentConfig: { ...defaultSettings.agentConfig, ...(parsed.agentConfig || {}) },
+    corporateColors: { ...defaultSettings.corporateColors, ...(parsed.corporateColors || {}) },
   };
 }
 
@@ -375,6 +390,13 @@ export function updateAppSettings(partial: Partial<AppSettings>): AppSettings {
     agentConfig: {
       ...current.agentConfig,
       ...(partial.agentConfig || {}),
+    },
+    corporateColors: {
+      primaryColor: partial.corporateColors?.primaryColor || current.corporateColors?.primaryColor || '#06b6d4',
+      secondaryColor: partial.corporateColors?.secondaryColor || current.corporateColors?.secondaryColor || '#2563eb',
+      companyBrandName: partial.corporateColors?.companyBrandName || current.corporateColors?.companyBrandName || 'FDIM Suite',
+      themeMode: partial.corporateColors?.themeMode || current.corporateColors?.themeMode || 'dark-cyan',
+      customCssVarEnabled: true,
     },
   };
   db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('global', JSON.stringify(merged));
@@ -757,6 +779,16 @@ export function getAllUsers(): AuthUser[] {
 export function findUserByUsername(username: string): AuthUser | null {
   const row = db.prepare('SELECT data FROM users WHERE LOWER(username) = LOWER(?)').get(username) as { data: string } | undefined;
   return row ? JSON.parse(row.data) : null;
+}
+
+export function saveUser(user: AuthUser): AuthUser {
+  const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(user.id) as { id: string } | undefined;
+  if (existing) {
+    db.prepare('UPDATE users SET username = ?, data = ? WHERE id = ?').run(user.username, JSON.stringify(user), user.id);
+  } else {
+    db.prepare('INSERT INTO users (id, username, data) VALUES (?, ?, ?)').run(user.id, user.username, JSON.stringify(user));
+  }
+  return user;
 }
 
 // Database stats & file info
