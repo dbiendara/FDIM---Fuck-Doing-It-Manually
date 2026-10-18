@@ -118,9 +118,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         .catch((err) => console.error('Error fetching settings:', err));
 
       fetch('/api/database/info')
-        .then((r) => r.json())
-        .then((meta) => setDbMetadata(meta))
-        .catch((err) => console.error('Error fetching db metadata:', err));
+        .then((r) => {
+          if (!r.ok) return null;
+          return r.json();
+        })
+        .then((meta) => {
+          if (meta && !meta.error) {
+            setDbMetadata(meta);
+          }
+        })
+        .catch((err) => console.warn('Could not load db metadata:', err));
     }
   }, [isOpen]);
 

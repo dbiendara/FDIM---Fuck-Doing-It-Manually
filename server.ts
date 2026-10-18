@@ -1702,7 +1702,12 @@ app.put('/api/settings', (req, res) => {
 });
 
 app.get('/api/database/info', (req, res) => {
-  res.json(getDatabaseMetadata());
+  try {
+    res.json(getDatabaseMetadata());
+  } catch (err: any) {
+    console.error('Error in /api/database/info:', err);
+    res.status(500).json({ error: err?.message || 'Failed to retrieve database metadata' });
+  }
 });
 
 app.get('/api/database/download', (req, res) => {

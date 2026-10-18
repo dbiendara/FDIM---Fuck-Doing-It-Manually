@@ -644,7 +644,7 @@ export function getAllQueuedTasks(): QueuedTask[] {
 }
 
 export function getQueuedTasksForMachine(machineName: string): QueuedTask[] {
-  const rows = db.prepare('SELECT data FROM queued_tasks WHERE LOWER(machine_name) = LOWER(?) AND status IN ("queued", "dispatching") ORDER BY created_at ASC').all(machineName) as Array<{ data: string }>;
+  const rows = db.prepare("SELECT data FROM queued_tasks WHERE LOWER(machine_name) = LOWER(?) AND status IN ('queued', 'dispatching') ORDER BY created_at ASC").all(machineName) as Array<{ data: string }>;
   return rows.map((r) => JSON.parse(r.data));
 }
 
@@ -806,7 +806,7 @@ export function getDatabaseMetadata() {
   const deploymentCount = (db.prepare('SELECT COUNT(*) as cnt FROM deployments').get() as { cnt: number }).cnt;
   const switchCount = (db.prepare('SELECT COUNT(*) as cnt FROM system_switches').get() as { cnt: number }).cnt;
   const adComputerCount = (db.prepare('SELECT COUNT(*) as cnt FROM ad_computers').get() as { cnt: number }).cnt;
-  const queuedTaskCount = (db.prepare('SELECT COUNT(*) as cnt FROM queued_tasks WHERE status = "queued"').get() as { cnt: number }).cnt;
+  const queuedTaskCount = (db.prepare("SELECT COUNT(*) as cnt FROM queued_tasks WHERE status = 'queued'").get() as { cnt: number }).cnt;
 
   return {
     engine: 'SQLite (Node.js 22 Native DatabaseSync)',
