@@ -1333,11 +1333,21 @@ app.delete('/api/agent/tasks/:id', (req, res) => {
 function checkAgentAuthorization(req: express.Request, res: express.Response): boolean {
   const settings = getAppSettings();
   const agentCfg = settings.agentConfig;
+
+  // Enforce HTTPS if configured
+  if (agentCfg?.enforceHttps) {
+    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    if (!isHttps && req.headers['host'] && !req.headers['host'].includes('localhost')) {
+      res.status(403).json({ error: 'HTTPS connection required by FDIM Agent Security Policy.' });
+      return false;
+    }
+  }
+
   if (!agentCfg || !agentCfg.encryptionMode || agentCfg.encryptionMode === 'none' || !agentCfg.preSharedKey) {
     return true; // No encryption enforcement configured
   }
 
-  const tokenHeader = (req.headers['x-fdim-agent-token'] as string) || (req.headers['authorization'] as string);
+  const tokenHeader = (req.headers['x-fdim-agent-token'] as string) || (req.headers['authorization'] as string) || (req.headers['x-agent-signature'] as string);
   if (!tokenHeader) {
     res.status(401).json({ error: 'Agent encryption token required. Provide X-FDIM-Agent-Token or Authorization Bearer header.' });
     return false;
@@ -1627,7 +1637,7 @@ try {
 }
 '@
 
-$WorkerContent = $WorkerContent.Replace("__SERVER_URL__", $ServerUrl).Replace("__AGENT_TOKEN__", pskToken)
+$WorkerContent = $WorkerContent.Replace("__SERVER_URL__", $ServerUrl).Replace("__AGENT_TOKEN__", "${pskToken}")
 Set-Content -Path $WorkerScript -Value $WorkerContent -Encoding UTF8 -Force
 Write-Host "[OK] Created Agent Worker Script at $WorkerScript" -ForegroundColor Green
 

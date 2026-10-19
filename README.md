@@ -57,9 +57,9 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 - **Isolated VM Testing**: Safely test unknown, modified, or updated software packages in an isolated Windows VM template on Proxmox VE, Hyper-V, or container sandbox before pushing to production.
 - **Unattended Execution Verification**: Runs silent arguments, monitors process execution time, and validates official exit codes (`0`, `3010`).
 - **Compliance Detection Verification**: Tests registry and file path detection rules in real-time.
-- **Automatic Snapshot Rollback (Standardstatus wiederherstellen)**: Reverts the test VM to its pristine baseline snapshot (`clean-baseline`) via the Proxmox VE API immediately after testing, ensuring a clean state for subsequent tests.
+- **Automatic Snapshot Rollback (Restore Clean Baseline)**: Reverts the test VM to its pristine baseline snapshot (`clean-baseline`) via the Proxmox VE API immediately after testing, ensuring a clean state for subsequent tests.
 
-### 🛡️ Delegated Helpdesk Execution (Dienstbenutzer für Runner)
+### 🛡️ Delegated Helpdesk Execution (Delegated Service Account for Runner)
 - **Non-Admin Helpdesk Deployment**: Allows Tier-1 Helpdesk technicians and Junior IT staff without Domain Admin privileges or local administrative accounts to trigger and dispatch software installations.
 - **Elevated Execution Identities**:
   - **Client Agent (SYSTEM)**: Autonomous execution via local SYSTEM token.

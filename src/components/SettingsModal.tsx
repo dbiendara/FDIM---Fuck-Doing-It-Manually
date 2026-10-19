@@ -301,7 +301,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             }`}
           >
             <UserCheck className="w-4 h-4 text-emerald-400" />
-            <span>Dienstbenutzer (Helpdesk)</span>
+            <span>Delegated Runner (Helpdesk)</span>
           </button>
 
           <button
@@ -1024,7 +1024,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm font-bold text-white flex items-center space-x-2">
                     <UserCheck className="w-4 h-4 text-emerald-400" />
-                    <span>Dienstbenutzer für Runner (Delegated Helpdesk Deployment)</span>
+                    <span>Delegated Runner Service Account (Helpdesk Deployment)</span>
                   </h3>
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input
@@ -1242,7 +1242,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                     <div>
                       <span className="text-xs font-semibold text-slate-200">
-                        Automatic Snapshot Rollback after Successful Test (Standardstatus wiederherstellen)
+                        Automatic Snapshot Rollback after Successful Test (Restore Clean Baseline)
                       </span>
                       <p className="text-[11px] text-slate-400 mt-0.5">
                         Immediately roll back the test VM to the pristine baseline snapshot after testing so the environment is always clean for subsequent package tests.
@@ -1335,6 +1335,152 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-500"
                     />
                   </div>
+                </div>
+
+                {/* Agent Communication Security & Encryption Configuration */}
+                <div className="mt-5 p-4 bg-slate-900/80 rounded-xl border border-slate-800 space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div className="flex items-center space-x-2">
+                      <Shield className="w-4 h-4 text-emerald-400" />
+                      <div>
+                        <h4 className="text-xs font-bold text-white">Agent Transport Encryption & Security</h4>
+                        <p className="text-[11px] text-slate-400">Authenticate Scheduled Task check-ins and protect offline wait-task dispatching</p>
+                      </div>
+                    </div>
+
+                    <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-mono font-semibold border ${
+                      settings.agentConfig?.encryptionMode && settings.agentConfig.encryptionMode !== 'none'
+                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
+                        : 'bg-amber-950/80 text-amber-300 border-amber-800'
+                    }`}>
+                      {settings.agentConfig?.encryptionMode && settings.agentConfig.encryptionMode !== 'none'
+                        ? `Secured (${(settings.agentConfig.encryptionMode || '').toUpperCase()})`
+                        : 'Unsecured (LAN Only)'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        Encryption & Authentication Mode:
+                      </label>
+                      <select
+                        value={settings.agentConfig?.encryptionMode || 'none'}
+                        onChange={(e) => {
+                          const mode = e.target.value as 'none' | 'token-bearer' | 'hmac-sha256';
+                          let psk = settings.agentConfig?.preSharedKey;
+                          if (mode !== 'none' && !psk) {
+                            psk = 'fdim_sec_' + Array.from(crypto.getRandomValues(new Uint8Array(16)))
+                              .map((b) => b.toString(16).padStart(2, '0'))
+                              .join('');
+                          }
+                          setSettings({
+                            ...settings,
+                            agentConfig: {
+                              ...settings.agentConfig,
+                              encryptionMode: mode,
+                              preSharedKey: psk,
+                            },
+                          });
+                        }}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="none">None (Standard unauthenticated HTTP / Internal LAN)</option>
+                        <option value="token-bearer">Bearer Token / Pre-Shared Key (Recommended)</option>
+                        <option value="hmac-sha256">HMAC-SHA256 Payload Signature Verification</option>
+                      </select>
+                      <span className="text-[10px] text-slate-500 block mt-1">
+                        Requires all client scheduled tasks to provide matching authentication token
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        Enforce HTTPS Transport:
+                      </label>
+                      <label className="flex items-center space-x-2 pt-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={settings.agentConfig?.enforceHttps || false}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              agentConfig: {
+                                ...settings.agentConfig,
+                                enforceHttps: e.target.checked,
+                              },
+                            })
+                          }
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-400 w-4 h-4 cursor-pointer"
+                        />
+                        <span className="text-xs text-slate-300 font-medium">Reject unencrypted non-HTTPS traffic</span>
+                      </label>
+                      <span className="text-[10px] text-slate-500 block mt-1">
+                        Ensures agent heartbeats cannot be intercepted over non-TLS connections
+                      </span>
+                    </div>
+                  </div>
+
+                  {settings.agentConfig?.encryptionMode && settings.agentConfig.encryptionMode !== 'none' && (
+                    <div className="pt-2 border-t border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-mono text-slate-300 uppercase font-semibold">
+                          Pre-Shared Secret Key (PSK Token):
+                        </label>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newPsk = 'fdim_sec_' + Array.from(crypto.getRandomValues(new Uint8Array(18)))
+                                .map((b) => b.toString(16).padStart(2, '0'))
+                                .join('');
+                              setSettings({
+                                ...settings,
+                                agentConfig: {
+                                  ...settings.agentConfig,
+                                  preSharedKey: newPsk,
+                                },
+                              });
+                            }}
+                            className="text-[10px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 flex items-center space-x-1 cursor-pointer"
+                            title="Generate a cryptographically random secret key"
+                          >
+                            <RefreshCw className="w-2.5 h-2.5" />
+                            <span>Regenerate Key</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(settings.agentConfig?.preSharedKey || '', 'agent-psk')}
+                            className="text-[10px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center space-x-1 cursor-pointer"
+                          >
+                            {copiedKey === 'agent-psk' ? <Check className="w-2.5 h-2.5 text-emerald-400" /> : <Copy className="w-2.5 h-2.5" />}
+                            <span>{copiedKey === 'agent-psk' ? 'Copied' : 'Copy'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={settings.agentConfig?.preSharedKey || ''}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              agentConfig: {
+                                ...settings.agentConfig,
+                                preSharedKey: e.target.value,
+                              },
+                            })
+                          }
+                          placeholder="fdim_sec_..."
+                          className="w-full bg-slate-950 border border-emerald-500/50 rounded-lg px-3 py-2 text-xs font-mono text-emerald-300 focus:outline-none focus:border-emerald-400"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-400">
+                        This token is automatically injected into the generated <code>Install-FDIMAgent.ps1</code> script and verified on each client heartbeat check-in.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* 1-Liner Quick Deploy Box */}

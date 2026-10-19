@@ -479,7 +479,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
             <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
             <span className="font-semibold text-slate-200">Execution Identity:</span>
             <span className="text-slate-400 hidden md:inline">
-              (Dienstbenutzer für Helpdesk-Mitarbeiter ohne lokale Adminrechte)
+              (Delegated service account for Helpdesk staff without local administrative rights)
             </span>
           </div>
 

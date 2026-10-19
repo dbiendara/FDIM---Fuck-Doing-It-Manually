@@ -49,6 +49,13 @@ export interface PrinterMapping {
   enabled?: boolean; // Active toggle for this PC deployment
 }
 
+export interface UserLogonStagingSnippet {
+  id: string;
+  name: string;
+  script: string;
+  enabled: boolean;
+}
+
 export interface UserLogonStagingConfig {
   enabled: boolean;
   stagingPath?: string; // Default: "C:\ProgramData\FDIM\UserLogonSetup.ps1"
@@ -57,7 +64,7 @@ export interface UserLogonStagingConfig {
   cleanUpAfterFirstRun?: boolean;
   // First-run enhancements & custom script snippets
   customScriptText?: string; // Custom PowerShell code executed at user logon
-  customScriptSnippets?: Array<{ id: string; name: string; script: string; enabled: boolean }>;
+  customScriptSnippets?: UserLogonStagingSnippet[];
   createDesktopShortcuts?: boolean;
   configureEdgeHomepage?: boolean;
   edgeHomepageUrl?: string;

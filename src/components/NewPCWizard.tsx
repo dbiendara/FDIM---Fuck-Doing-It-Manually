@@ -7,6 +7,7 @@ import {
   NetworkDriveMapping,
   PrinterMapping,
   UserLogonStagingConfig,
+  UserLogonStagingSnippet,
 } from '../types';
 import {
   Monitor,
@@ -49,6 +50,9 @@ import {
   RefreshCw,
   UserX,
   Lock,
+  Zap,
+  Battery,
+  Code,
 } from 'lucide-react';
 import {
   loadWizardDraft,
@@ -159,6 +163,8 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
       setPowerPlan: powerEnabled,
       screenTimeoutAc: customer.powerPlanSettings?.screenTimeoutAc ?? 15,
       standbyTimeoutAc: customer.powerPlanSettings?.standbyTimeoutAc ?? 0,
+      screenTimeoutDc: customer.powerPlanSettings?.screenTimeoutDc ?? 10,
+      standbyTimeoutDc: customer.powerPlanSettings?.standbyTimeoutDc ?? 20,
       enableLocalAdmin: localAdminEnabled,
       localAdminPassword: localAdminPwd,
       adminPasswordNeverExpires: pwdNeverExpires,
@@ -171,6 +177,8 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
       adAdminGroupName: customer.defaultAdAdminGroup,
       screenTimeoutAc: customer.powerPlanSettings?.screenTimeoutAc ?? 15,
       standbyTimeoutAc: customer.powerPlanSettings?.standbyTimeoutAc ?? 0,
+      screenTimeoutDc: customer.powerPlanSettings?.screenTimeoutDc ?? 10,
+      standbyTimeoutDc: customer.powerPlanSettings?.standbyTimeoutDc ?? 20,
       localAdminPassword: localAdminPwd,
       oobeAccountName: oobeName,
     }));
@@ -265,6 +273,8 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
       setPowerPlan: powerEnabled,
       screenTimeoutAc: currentCustomer.powerPlanSettings?.screenTimeoutAc ?? 15,
       standbyTimeoutAc: currentCustomer.powerPlanSettings?.standbyTimeoutAc ?? 0,
+      screenTimeoutDc: currentCustomer.powerPlanSettings?.screenTimeoutDc ?? 10,
+      standbyTimeoutDc: currentCustomer.powerPlanSettings?.standbyTimeoutDc ?? 20,
       enableLocalAdmin: localAdminEnabled,
       localAdminPassword: localAdminPwd,
       adminPasswordNeverExpires: pwdNeverExpires,
@@ -276,6 +286,8 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
       adAdminGroupName: currentCustomer.defaultAdAdminGroup,
       screenTimeoutAc: currentCustomer.powerPlanSettings?.screenTimeoutAc ?? 15,
       standbyTimeoutAc: currentCustomer.powerPlanSettings?.standbyTimeoutAc ?? 0,
+      screenTimeoutDc: currentCustomer.powerPlanSettings?.screenTimeoutDc ?? 10,
+      standbyTimeoutDc: currentCustomer.powerPlanSettings?.standbyTimeoutDc ?? 20,
       localAdminPassword: localAdminPwd,
       oobeAccountName: oobeName,
     });
@@ -295,6 +307,8 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
         adAdminGroupName: currentCustomer.defaultAdAdminGroup,
         screenTimeoutAc: currentCustomer.powerPlanSettings?.screenTimeoutAc ?? 15,
         standbyTimeoutAc: currentCustomer.powerPlanSettings?.standbyTimeoutAc ?? 0,
+        screenTimeoutDc: currentCustomer.powerPlanSettings?.screenTimeoutDc ?? 10,
+        standbyTimeoutDc: currentCustomer.powerPlanSettings?.standbyTimeoutDc ?? 20,
         localAdminPassword: localAdminPwd,
         oobeAccountName: oobeName,
       },
@@ -305,6 +319,8 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
         setPowerPlan: powerEnabled,
         screenTimeoutAc: currentCustomer.powerPlanSettings?.screenTimeoutAc ?? 15,
         standbyTimeoutAc: currentCustomer.powerPlanSettings?.standbyTimeoutAc ?? 0,
+        screenTimeoutDc: currentCustomer.powerPlanSettings?.screenTimeoutDc ?? 10,
+        standbyTimeoutDc: currentCustomer.powerPlanSettings?.standbyTimeoutDc ?? 20,
         enableLocalAdmin: localAdminEnabled,
         localAdminPassword: localAdminPwd,
         adminPasswordNeverExpires: pwdNeverExpires,
@@ -478,6 +494,10 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
       setSystemConfig((prev) => ({ ...prev, screenTimeoutAc: Number(value) }));
     } else if (key === 'standbyTimeoutAc') {
       setSystemConfig((prev) => ({ ...prev, standbyTimeoutAc: Number(value) }));
+    } else if (key === 'screenTimeoutDc') {
+      setSystemConfig((prev) => ({ ...prev, screenTimeoutDc: Number(value) }));
+    } else if (key === 'standbyTimeoutDc') {
+      setSystemConfig((prev) => ({ ...prev, standbyTimeoutDc: Number(value) }));
     } else if (key === 'localAdminPassword') {
       setSystemConfig((prev) => ({ ...prev, localAdminPassword: String(value) }));
     } else if (key === 'oobeAccountName') {
@@ -980,35 +1000,114 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
                 {/* Parameter Input if applicable and switch is enabled */}
                 {sw.hasParameter && sw.parameterKey && (
                   <div className="pt-2 border-t border-slate-850 mt-1">
-                    <label className="block text-[10px] text-slate-400 uppercase font-mono mb-1">
-                      {sw.parameterLabel || sw.parameterKey}:
-                    </label>
-
-                    {sw.parameterType === 'select' && sw.parameterOptions ? (
-                      <select
-                        value={paramVal}
-                        onChange={(e) =>
-                          handleParamChange(
-                            sw.parameterKey!,
-                            isNaN(Number(e.target.value)) ? e.target.value : Number(e.target.value)
-                          )
-                        }
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-purple-500"
-                      >
-                        {sw.parameterOptions.map((opt) => (
-                          <option key={opt.label} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
+                    {sw.id === 'sw-power-screen' ? (
+                      <div className="space-y-2">
+                        <div>
+                          <label className="text-[10px] text-amber-300 uppercase font-mono mb-1 flex items-center space-x-1">
+                            <Zap className="w-2.5 h-2.5 text-amber-400" />
+                            <span>AC Screen Timeout:</span>
+                          </label>
+                          <select
+                            value={switchParameters.screenTimeoutAc ?? systemConfig.screenTimeoutAc ?? 15}
+                            onChange={(e) => handleParamChange('screenTimeoutAc', Number(e.target.value))}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500"
+                          >
+                            <option value={10}>10 Minutes</option>
+                            <option value={15}>15 Minutes</option>
+                            <option value={20}>20 Minutes</option>
+                            <option value={30}>30 Minutes</option>
+                            <option value={60}>60 Minutes</option>
+                            <option value={0}>Never (0)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-cyan-300 uppercase font-mono mb-1 flex items-center space-x-1">
+                            <Battery className="w-2.5 h-2.5 text-cyan-400" />
+                            <span>Battery Screen Timeout:</span>
+                          </label>
+                          <select
+                            value={switchParameters.screenTimeoutDc ?? systemConfig.screenTimeoutDc ?? 10}
+                            onChange={(e) => handleParamChange('screenTimeoutDc', Number(e.target.value))}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-500"
+                          >
+                            <option value={5}>5 Minutes</option>
+                            <option value={10}>10 Minutes</option>
+                            <option value={15}>15 Minutes</option>
+                            <option value={20}>20 Minutes</option>
+                            <option value={30}>30 Minutes</option>
+                          </select>
+                        </div>
+                      </div>
+                    ) : sw.id === 'sw-power-standby' ? (
+                      <div className="space-y-2">
+                        <div>
+                          <label className="text-[10px] text-amber-300 uppercase font-mono mb-1 flex items-center space-x-1">
+                            <Zap className="w-2.5 h-2.5 text-amber-400" />
+                            <span>AC Sleep / Standby:</span>
+                          </label>
+                          <select
+                            value={switchParameters.standbyTimeoutAc ?? systemConfig.standbyTimeoutAc ?? 0}
+                            onChange={(e) => handleParamChange('standbyTimeoutAc', Number(e.target.value))}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500"
+                          >
+                            <option value={0}>Never Sleep (0)</option>
+                            <option value={30}>30 Minutes</option>
+                            <option value={60}>60 Minutes</option>
+                            <option value={120}>120 Minutes</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-cyan-300 uppercase font-mono mb-1 flex items-center space-x-1">
+                            <Battery className="w-2.5 h-2.5 text-cyan-400" />
+                            <span>Battery Sleep / Standby:</span>
+                          </label>
+                          <select
+                            value={switchParameters.standbyTimeoutDc ?? systemConfig.standbyTimeoutDc ?? 20}
+                            onChange={(e) => handleParamChange('standbyTimeoutDc', Number(e.target.value))}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-500"
+                          >
+                            <option value={10}>10 Minutes</option>
+                            <option value={15}>15 Minutes</option>
+                            <option value={20}>20 Minutes</option>
+                            <option value={30}>30 Minutes</option>
+                            <option value={60}>60 Minutes</option>
+                            <option value={0}>Never Sleep (0)</option>
+                          </select>
+                        </div>
+                      </div>
                     ) : (
-                      <input
-                        type={sw.parameterType === 'number' ? 'number' : 'text'}
-                        value={paramVal || ''}
-                        onChange={(e) => handleParamChange(sw.parameterKey!, e.target.value)}
-                        placeholder={`e.g. ${sw.parameterDefaultValue || ''}`}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-cyan-300 font-mono focus:outline-none focus:border-purple-500"
-                      />
+                      <>
+                        <label className="block text-[10px] text-slate-400 uppercase font-mono mb-1">
+                          {sw.parameterLabel || sw.parameterKey}:
+                        </label>
+
+                        {sw.parameterType === 'select' && sw.parameterOptions ? (
+                          <select
+                            value={paramVal}
+                            onChange={(e) =>
+                              handleParamChange(
+                                sw.parameterKey!,
+                                isNaN(Number(e.target.value)) ? e.target.value : Number(e.target.value)
+                              )
+                            }
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-purple-500"
+                          >
+                            {sw.parameterOptions.map((opt) => (
+                              <option key={opt.label} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type={sw.parameterType === 'number' ? 'number' : 'text'}
+                            value={paramVal || ''}
+                            onChange={(e) => handleParamChange(sw.parameterKey!, e.target.value)}
+                            placeholder={`e.g. ${sw.parameterDefaultValue || ''}`}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-cyan-300 font-mono focus:outline-none focus:border-purple-500"
+                          />
+                        )}
+                      </>
                     )}
                   </div>
                 )}
@@ -1045,7 +1144,7 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Silent deployment from UNC shares or directly via Windows Package Manager (Winget) for tools not on the UNC repo (7-Zip, VLC, Outlook Classic)
+                Silent deployment from UNC shares, Office Deployment Tool (ODT Click-to-Run for Outlook Classic), or Windows Package Manager (Winget for 7-Zip, VLC)
               </p>
             </div>
           </div>

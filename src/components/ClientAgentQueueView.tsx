@@ -27,6 +27,7 @@ import {
   Cpu,
   Monitor,
   ShieldCheck,
+  Shield,
   FileText,
 } from 'lucide-react';
 
@@ -57,18 +58,37 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
   const [heartbeatInterval, setHeartbeatInterval] = useState(30);
   const [bootDelay, setBootDelay] = useState(5);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [agentEncryption, setAgentEncryption] = useState<{ mode: string; isSecured: boolean }>({
+    mode: 'none',
+    isSecured: false,
+  });
 
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const [tasksRes, compsRes] = await Promise.all([
+      const [tasksRes, compsRes, settingsRes] = await Promise.all([
         fetch('/api/agent/tasks'),
         fetch('/api/ad-computers'),
+        fetch('/api/settings').catch(() => null),
       ]);
       const tasksData = await tasksRes.json();
       const compsData = await compsRes.json();
       setTasks(tasksData);
       setComputers(compsData);
+
+      if (settingsRes && settingsRes.ok) {
+        const sets = await settingsRes.json();
+        if (sets?.agentConfig) {
+          const isSec = sets.agentConfig.encryptionMode && sets.agentConfig.encryptionMode !== 'none';
+          setAgentEncryption({
+            mode: sets.agentConfig.encryptionMode || 'none',
+            isSecured: Boolean(isSec),
+          });
+          if (sets.agentConfig.serverUrl) setServerUrl(sets.agentConfig.serverUrl);
+          if (sets.agentConfig.heartbeatIntervalMinutes) setHeartbeatInterval(sets.agentConfig.heartbeatIntervalMinutes);
+          if (sets.agentConfig.bootDelayMinutes) setBootDelay(sets.agentConfig.bootDelayMinutes);
+        }
+      }
     } catch (err) {
       console.error('Error fetching agent & task data:', err);
     } finally {
@@ -517,9 +537,19 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
                   <Terminal className="w-5 h-5 text-cyan-400" />
                   <span>Agent Deployment & GPO Scheduled Task Installation</span>
                 </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Deploy the client agent via Active Directory Group Policy (GPO Startup Script) or run the 1-liner on any Windows client.
-                </p>
+                <div className="flex flex-wrap items-center gap-2 mt-1">
+                  <p className="text-xs text-slate-400">
+                    Deploy the client agent via Active Directory Group Policy (GPO Startup Script) or run the 1-liner on any Windows client.
+                  </p>
+                  <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
+                    agentEncryption.isSecured
+                      ? 'bg-emerald-950/90 text-emerald-300 border-emerald-800'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}>
+                    <Shield className="w-3 h-3 text-emerald-400" />
+                    <span>{agentEncryption.isSecured ? `Secured (${agentEncryption.mode.toUpperCase()})` : 'Tokenless (LAN)'}</span>
+                  </span>
+                </div>
               </div>
 
               <a

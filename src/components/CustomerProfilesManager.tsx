@@ -5,6 +5,7 @@ import {
   NetworkDriveMapping,
   PrinterMapping,
   UserLogonStagingConfig,
+  UserLogonStagingSnippet,
 } from '../types';
 import {
   Building2,
@@ -28,6 +29,12 @@ import {
   ExternalLink,
   Printer,
   Info,
+  Battery,
+  Zap,
+  Terminal,
+  Globe,
+  Code,
+  Sparkles,
   Link2,
 } from 'lucide-react';
 
@@ -63,6 +70,8 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
   const [configurePowerSettings, setConfigurePowerSettings] = useState(false);
   const [screenTimeoutAc, setScreenTimeoutAc] = useState(15);
   const [standbyTimeoutAc, setStandbyTimeoutAc] = useState(0);
+  const [screenTimeoutDc, setScreenTimeoutDc] = useState(10);
+  const [standbyTimeoutDc, setStandbyTimeoutDc] = useState(20);
   const [enableRdp, setEnableRdp] = useState(true);
   const [selectedPkgIds, setSelectedPkgIds] = useState<string[]>([]);
   const [notes, setNotes] = useState('');
@@ -80,6 +89,17 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
   const [newPrinterType, setNewPrinterType] = useState<'PerMachineUNC' | 'UserLogonUNC' | 'DirectIP'>('PerMachineUNC');
   const [newPrinterDefault, setNewPrinterDefault] = useState(false);
 
+  // First-run user logon automation options & custom script snippets
+  const [configureEdgeHomepage, setConfigureEdgeHomepage] = useState(true);
+  const [edgeHomepageUrl, setEdgeHomepageUrl] = useState('');
+  const [createDesktopShortcuts, setCreateDesktopShortcuts] = useState(true);
+  const [showWelcomeNotification, setShowWelcomeNotification] = useState(true);
+  const [welcomeMessage, setWelcomeMessage] = useState('Welcome to your corporate workstation! Your network resources are staged.');
+  const [cleanUpAfterFirstRun, setCleanUpAfterFirstRun] = useState(false);
+  const [customScriptSnippets, setCustomScriptSnippets] = useState<UserLogonStagingSnippet[]>([]);
+  const [newSnippetName, setNewSnippetName] = useState('');
+  const [newSnippetScript, setNewSnippetScript] = useState('');
+
   const startEdit = (cust: CustomerProfile) => {
     setEditingCustomer(cust);
     setIsCreating(false);
@@ -91,6 +111,8 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
     setConfigurePowerSettings(cust.powerPlanSettings?.enabled === true);
     setScreenTimeoutAc(cust.powerPlanSettings?.screenTimeoutAc ?? 15);
     setStandbyTimeoutAc(cust.powerPlanSettings?.standbyTimeoutAc ?? 0);
+    setScreenTimeoutDc(cust.powerPlanSettings?.screenTimeoutDc ?? 10);
+    setStandbyTimeoutDc(cust.powerPlanSettings?.standbyTimeoutDc ?? 20);
     setEnableRdp(cust.enableRdp);
     setSelectedPkgIds(cust.packageIds || []);
     setNotes(cust.notes || '');
@@ -104,6 +126,17 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
     setNewPrinterPath(`\\\\corp-print01.internal.net\\${cust.customerCode || 'OFFICE'}-Color-MFP`);
     setNewPrinterType('PerMachineUNC');
     setNewPrinterDefault(false);
+
+    // First-run settings
+    setConfigureEdgeHomepage(cust.userLogonStaging?.configureEdgeHomepage ?? true);
+    setEdgeHomepageUrl(cust.userLogonStaging?.edgeHomepageUrl || `https://intranet.${cust.domainName || 'corp.internal'}`);
+    setCreateDesktopShortcuts(cust.userLogonStaging?.createDesktopShortcuts ?? true);
+    setShowWelcomeNotification(cust.userLogonStaging?.showWelcomeNotification ?? true);
+    setWelcomeMessage(cust.userLogonStaging?.welcomeMessage || `Welcome to ${cust.companyName}! Your workstation network resources are configured.`);
+    setCleanUpAfterFirstRun(cust.userLogonStaging?.cleanUpAfterFirstRun ?? false);
+    setCustomScriptSnippets(cust.userLogonStaging?.customScriptSnippets || []);
+    setNewSnippetName('');
+    setNewSnippetScript('');
   };
 
   const startCreate = () => {
@@ -117,9 +150,35 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
     setConfigurePowerSettings(false);
     setScreenTimeoutAc(15);
     setStandbyTimeoutAc(0);
+    setScreenTimeoutDc(10);
+    setStandbyTimeoutDc(20);
     setEnableRdp(true);
     setSelectedPkgIds(['pkg-chrome', 'pkg-7zip', 'pkg-m365']);
     setNotes('');
+
+    // First-run defaults
+    setConfigureEdgeHomepage(true);
+    setEdgeHomepageUrl(`https://intranet.${defaultDomain || 'corp.internal'}`);
+    setCreateDesktopShortcuts(true);
+    setShowWelcomeNotification(true);
+    setWelcomeMessage('Welcome to your corporate workstation! Your network resources are staged.');
+    setCleanUpAfterFirstRun(false);
+    setCustomScriptSnippets([
+      {
+        id: `snip-${Date.now()}-1`,
+        name: 'Map Corporate Outlook Signature Template',
+        script: `# Copy corporate email signature template to user's AppData\n$sigDir = "$env:APPDATA\\Microsoft\\Signatures"\nif (-not (Test-Path $sigDir)) { New-Item -ItemType Directory -Path $sigDir -Force | Out-Null }`,
+        enabled: true,
+      },
+      {
+        id: `snip-${Date.now()}-2`,
+        name: 'Pin Corporate Intranet to Desktop',
+        script: `$wsh = New-Object -ComObject WScript.Shell\n$shortcut = $wsh.CreateShortcut("$env:USERPROFILE\\Desktop\\Corporate Intranet.url")\n$shortcut.TargetPath = "https://intranet.${defaultDomain || 'corp.internal'}"\n$shortcut.Save()`,
+        enabled: true,
+      },
+    ]);
+    setNewSnippetName('');
+    setNewSnippetScript('');
 
     // Default template drives & printers for new client
     setNetworkDrives([
@@ -229,7 +288,7 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
           'pkg-m365',
           'pkg-winget-7zip',
           'pkg-winget-vlc',
-          'pkg-winget-outlook-classic',
+          'pkg-outlook-classic',
         ].includes(p.id)
       )
       .map((p) => p.id);
@@ -249,6 +308,8 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
         enabled: configurePowerSettings,
         screenTimeoutAc,
         standbyTimeoutAc,
+        screenTimeoutDc,
+        standbyTimeoutDc,
       },
       packageIds: selectedPkgIds,
       packageCustomSwitches: editingCustomer?.packageCustomSwitches || {},
@@ -260,7 +321,13 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
         stagingPath: 'C:\\ProgramData\\FDIM\\UserLogonSetup.ps1',
         activeSetupKey: 'FDIM_UserProvisioning',
         scheduledTaskFallback: true,
-        cleanUpAfterFirstRun: false,
+        cleanUpAfterFirstRun,
+        createDesktopShortcuts,
+        configureEdgeHomepage,
+        edgeHomepageUrl,
+        showWelcomeNotification,
+        welcomeMessage,
+        customScriptSnippets,
       },
       localAdminSettings: editingCustomer?.localAdminSettings || {
         enableLocalAdmin: true,
@@ -429,58 +496,101 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1.5">
-                  Screen Timeout (AC Power)
-                  {!configurePowerSettings && <span className="text-[10px] text-slate-500 ml-1.5">(Disabled)</span>}
-                </label>
-                <select
-                  disabled={!configurePowerSettings}
-                  value={screenTimeoutAc}
-                  onChange={(e) => setScreenTimeoutAc(parseInt(e.target.value, 10))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <option value={10}>10 Minutes</option>
-                  <option value={15}>15 Minutes</option>
-                  <option value={20}>20 Minutes</option>
-                  <option value={30}>30 Minutes</option>
-                  <option value={0}>Never (0)</option>
-                </select>
-              </div>
+            {configurePowerSettings && (
+              <div className="p-3.5 bg-slate-900/90 rounded-xl border border-purple-500/30 space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* AC Power (Plugged In) */}
+                  <div className="p-3 bg-slate-950/80 rounded-lg border border-slate-800 space-y-2.5">
+                    <div className="flex items-center space-x-1.5 text-xs font-bold text-amber-300">
+                      <Zap className="w-3.5 h-3.5 text-amber-400" />
+                      <span>AC Power / Plugged In</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Display Turn-Off:</label>
+                        <select
+                          value={screenTimeoutAc}
+                          onChange={(e) => setScreenTimeoutAc(parseInt(e.target.value, 10))}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-cyan-500"
+                        >
+                          <option value={10}>10 Minutes</option>
+                          <option value={15}>15 Minutes</option>
+                          <option value={20}>20 Minutes</option>
+                          <option value={30}>30 Minutes</option>
+                          <option value={60}>60 Minutes</option>
+                          <option value={0}>Never (0)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">System Sleep:</label>
+                        <select
+                          value={standbyTimeoutAc}
+                          onChange={(e) => setStandbyTimeoutAc(parseInt(e.target.value, 10))}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-cyan-500"
+                        >
+                          <option value={0}>Never Sleep (0)</option>
+                          <option value={30}>30 Minutes</option>
+                          <option value={60}>60 Minutes</option>
+                          <option value={120}>120 Minutes</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
 
-              <div>
-                <label className="block text-slate-300 font-medium mb-1.5">
-                  Standby Timeout (AC Power)
-                  {!configurePowerSettings && <span className="text-[10px] text-slate-500 ml-1.5">(Disabled)</span>}
-                </label>
-                <select
-                  disabled={!configurePowerSettings}
-                  value={standbyTimeoutAc}
-                  onChange={(e) => setStandbyTimeoutAc(parseInt(e.target.value, 10))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <option value={0}>Never Sleep (0)</option>
-                  <option value={30}>30 Minutes</option>
-                  <option value={60}>60 Minutes</option>
-                  <option value={120}>120 Minutes</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1.5">Remote Desktop (RDP)</label>
-                <div className="flex items-center space-x-2 pt-2">
-                  <input
-                    type="checkbox"
-                    checked={enableRdp}
-                    onChange={(e) => setEnableRdp(e.target.checked)}
-                    id="enable-rdp-toggle"
-                    className="rounded border-slate-700 text-cyan-600 focus:ring-cyan-500 w-4 h-4 cursor-pointer"
-                  />
-                  <label htmlFor="enable-rdp-toggle" className="text-white cursor-pointer select-none">
-                    Enable RDP with Firewall Rules & NLA
-                  </label>
+                  {/* Battery Power (DC / Laptops) */}
+                  <div className="p-3 bg-slate-950/80 rounded-lg border border-slate-800 space-y-2.5">
+                    <div className="flex items-center space-x-1.5 text-xs font-bold text-cyan-300">
+                      <Battery className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Battery Power (DC / Laptops)</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Display Turn-Off:</label>
+                        <select
+                          value={screenTimeoutDc}
+                          onChange={(e) => setScreenTimeoutDc(parseInt(e.target.value, 10))}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-cyan-500"
+                        >
+                          <option value={5}>5 Minutes</option>
+                          <option value={10}>10 Minutes</option>
+                          <option value={15}>15 Minutes</option>
+                          <option value={20}>20 Minutes</option>
+                          <option value={30}>30 Minutes</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">System Sleep:</label>
+                        <select
+                          value={standbyTimeoutDc}
+                          onChange={(e) => setStandbyTimeoutDc(parseInt(e.target.value, 10))}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-cyan-500"
+                        >
+                          <option value={10}>10 Minutes</option>
+                          <option value={15}>15 Minutes</option>
+                          <option value={20}>20 Minutes</option>
+                          <option value={30}>30 Minutes</option>
+                          <option value={60}>60 Minutes</option>
+                          <option value={0}>Never Sleep (0)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
                 </div>
+              </div>
+            )}
+
+            <div>
+              <div className="flex items-center space-x-2 pt-1 text-xs">
+                <input
+                  type="checkbox"
+                  checked={enableRdp}
+                  onChange={(e) => setEnableRdp(e.target.checked)}
+                  id="enable-rdp-toggle"
+                  className="rounded border-slate-700 text-cyan-600 focus:ring-cyan-500 w-4 h-4 cursor-pointer"
+                />
+                <label htmlFor="enable-rdp-toggle" className="text-white cursor-pointer select-none font-medium">
+                  Enable Remote Desktop (RDP) with Windows Firewall Rules & NLA
+                </label>
               </div>
             </div>
 
@@ -707,6 +817,234 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
             </div>
           </div>
 
+          {/* USER FIRST-RUN LOGON AUTOMATION & CUSTOM SCRIPT SNIPPETS */}
+          <div className="p-4 rounded-xl bg-slate-950 border border-amber-800/40 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-800">
+              <div className="flex items-center space-x-2">
+                <Terminal className="w-4 h-4 text-amber-400" />
+                <div>
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                    First-Run User Logon Options & Custom Script Snippets
+                  </h4>
+                  <p className="text-[11px] text-slate-400">
+                    Staged in Active Setup (<code className="text-amber-300 font-mono">UserLogonSetup.ps1</code>), executed silently when the employee first signs in
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* General First-Run Checkboxes */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2">
+                <label className="flex items-center space-x-2 cursor-pointer font-medium text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={configureEdgeHomepage}
+                    onChange={(e) => setConfigureEdgeHomepage(e.target.checked)}
+                    className="rounded border-slate-700 text-amber-500 focus:ring-amber-400 w-4 h-4"
+                  />
+                  <span>Configure Microsoft Edge Corporate Homepage</span>
+                </label>
+                {configureEdgeHomepage && (
+                  <input
+                    type="text"
+                    value={edgeHomepageUrl}
+                    onChange={(e) => setEdgeHomepageUrl(e.target.value)}
+                    placeholder="https://intranet.company.com"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-amber-300 font-mono"
+                  />
+                )}
+              </div>
+
+              <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2">
+                <label className="flex items-center space-x-2 cursor-pointer font-medium text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={showWelcomeNotification}
+                    onChange={(e) => setShowWelcomeNotification(e.target.checked)}
+                    className="rounded border-slate-700 text-amber-500 focus:ring-amber-400 w-4 h-4"
+                  />
+                  <span>Show First-Logon IT Welcome Notification</span>
+                </label>
+                {showWelcomeNotification && (
+                  <input
+                    type="text"
+                    value={welcomeMessage}
+                    onChange={(e) => setWelcomeMessage(e.target.value)}
+                    placeholder="Welcome message text"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
+                  />
+                )}
+              </div>
+
+              <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 flex items-center justify-between">
+                <label className="flex items-center space-x-2 cursor-pointer font-medium text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={createDesktopShortcuts}
+                    onChange={(e) => setCreateDesktopShortcuts(e.target.checked)}
+                    className="rounded border-slate-700 text-amber-500 focus:ring-amber-400 w-4 h-4"
+                  />
+                  <span>Create Desktop Shortcuts to Mapped Network Shares</span>
+                </label>
+              </div>
+
+              <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 flex items-center justify-between">
+                <label className="flex items-center space-x-2 cursor-pointer font-medium text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={cleanUpAfterFirstRun}
+                    onChange={(e) => setCleanUpAfterFirstRun(e.target.checked)}
+                    className="rounded border-slate-700 text-amber-500 focus:ring-amber-400 w-4 h-4"
+                  />
+                  <span>Clean up Active Setup staging script after first run</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Custom PowerShell Script Snippets Sub-section */}
+            <div className="p-3 bg-slate-900/70 rounded-xl border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 text-xs font-bold text-white">
+                  <Code className="w-4 h-4 text-cyan-400" />
+                  <span>Custom First-Run PowerShell Snippets ({customScriptSnippets.length})</span>
+                </div>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  Runs under user interactive Kerberos session
+                </span>
+              </div>
+
+              {/* Snippet List */}
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {customScriptSnippets.map((snip) => (
+                  <div
+                    key={snip.id}
+                    className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-start justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-start space-x-2.5 min-w-0 flex-1">
+                      <input
+                        type="checkbox"
+                        checked={snip.enabled !== false}
+                        onChange={() => {
+                          setCustomScriptSnippets((prev) =>
+                            prev.map((s) => (s.id === snip.id ? { ...s, enabled: !s.enabled } : s))
+                          );
+                        }}
+                        className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-400 w-3.5 h-3.5 mt-0.5"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <strong className="text-white block text-xs">{snip.name}</strong>
+                        <pre className="text-[10px] font-mono text-cyan-300/80 bg-slate-900/90 p-1.5 rounded mt-1 overflow-x-auto max-h-16">
+                          {snip.script}
+                        </pre>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCustomScriptSnippets((prev) => prev.filter((s) => s.id !== snip.id))}
+                      className="text-slate-500 hover:text-red-400 p-1 transition-colors shrink-0 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+                {customScriptSnippets.length === 0 && (
+                  <div className="text-[11px] text-slate-500 italic p-3 text-center border border-dashed border-slate-800 rounded-lg">
+                    No custom script snippets added. You can add one below or choose a template.
+                  </div>
+                )}
+              </div>
+
+              {/* Add New Snippet Form */}
+              <div className="pt-2 border-t border-slate-800 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[10px] uppercase font-mono text-slate-400 font-bold">Add Custom PowerShell Snippet:</span>
+                  <div className="flex flex-wrap items-center gap-1 text-[10px]">
+                    <span className="text-slate-500">Insert Template:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewSnippetName('Set Outlook Signature Template');
+                        setNewSnippetScript(`$sigDir = "$env:APPDATA\\Microsoft\\Signatures"\nif (-not (Test-Path $sigDir)) { New-Item -ItemType Directory -Path $sigDir -Force | Out-Null }\nWrite-Output "Signature folder initialized"`);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono cursor-pointer"
+                    >
+                      Outlook Sig
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewSnippetName('Pin Intranet Desktop Shortcut');
+                        setNewSnippetScript(`$wsh = New-Object -ComObject WScript.Shell\n$shortcut = $wsh.CreateShortcut("$env:USERPROFILE\\Desktop\\Corporate Portal.url")\n$shortcut.TargetPath = "https://portal.${domainName || 'corp.internal'}"\n$shortcut.Save()`);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono cursor-pointer"
+                    >
+                      Desktop Portal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewSnippetName('Import Corporate Root CA to User Store');
+                        setNewSnippetScript(`$certPath = "\\\\${uncShareRoot ? uncShareRoot.split('\\\\')[1] : 'corp-fs01'}\\Certs\\corp-root-ca.cer"\nif (Test-Path $certPath) { Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\\CurrentUser\\Root }`);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono cursor-pointer"
+                    >
+                      User Cert
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewSnippetName('Disable Consumer Cloud Advertising in HKCU');
+                        setNewSnippetScript(`Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo" -Name "Enabled" -Value 0 -Type DWord -Force`);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono cursor-pointer"
+                    >
+                      Privacy HKCU
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={newSnippetName}
+                    onChange={(e) => setNewSnippetName(e.target.value)}
+                    placeholder="Snippet Title (e.g. Map Outlook Signature Template)"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                  />
+                  <textarea
+                    rows={2}
+                    value={newSnippetScript}
+                    onChange={(e) => setNewSnippetScript(e.target.value)}
+                    placeholder="PowerShell commands executed at user logon..."
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-cyan-300"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newSnippetName || !newSnippetScript) return;
+                      setCustomScriptSnippets((prev) => [
+                        ...prev,
+                        {
+                          id: `snip-${Date.now()}`,
+                          name: newSnippetName,
+                          script: newSnippetScript,
+                          enabled: true,
+                        },
+                      ]);
+                      setNewSnippetName('');
+                      setNewSnippetScript('');
+                    }}
+                    disabled={!newSnippetName || !newSnippetScript}
+                    className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    + Add Custom Snippet
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* DEFAULT SOFTWARE SELECTION IN CUSTOMER PROFILE EDITOR */}
           <div className="p-4 rounded-xl bg-slate-950 border border-cyan-800/40 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-800">
@@ -914,7 +1252,11 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
                   <div className="flex justify-between">
                     <span className="text-slate-400">Power Plan:</span>
                     {cust.powerPlanSettings?.enabled ? (
-                      <span>Screen {cust.powerPlanSettings.screenTimeoutAc}m • Standby {cust.powerPlanSettings.standbyTimeoutAc === 0 ? 'Never' : `${cust.powerPlanSettings.standbyTimeoutAc}m`}</span>
+                      <span className="text-[11px] text-right">
+                        <span className="text-amber-300 font-medium">AC: {cust.powerPlanSettings.screenTimeoutAc}m/{cust.powerPlanSettings.standbyTimeoutAc === 0 ? 'Never' : `${cust.powerPlanSettings.standbyTimeoutAc}m`}</span>
+                        <span className="text-slate-500"> • </span>
+                        <span className="text-cyan-300 font-medium">Battery: {cust.powerPlanSettings.screenTimeoutDc ?? 10}m/{cust.powerPlanSettings.standbyTimeoutDc === 0 ? 'Never' : `${cust.powerPlanSettings.standbyTimeoutDc ?? 20}m`}</span>
+                      </span>
                     ) : (
                       <span className="text-slate-500 italic">Workstation default (Unchanged)</span>
                     )}
