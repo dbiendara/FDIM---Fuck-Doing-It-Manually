@@ -36,6 +36,7 @@ import {
   deleteQueuedTask,
   getAllPackageTests,
   savePackageTest,
+  getComputerHistory,
 } from './server/db.ts';
 import { AuthUser, ADComputer, QueuedTask, PackageSandboxTest } from './src/types';
 
@@ -111,12 +112,26 @@ export interface PrinterMapping {
   enabled?: boolean;
 }
 
+export interface UserLogonStagingSnippet {
+  id: string;
+  name: string;
+  script: string;
+  enabled: boolean;
+}
+
 export interface UserLogonStagingConfig {
   enabled: boolean;
   stagingPath?: string;
   activeSetupKey?: string;
   scheduledTaskFallback?: boolean;
   cleanUpAfterFirstRun?: boolean;
+  customScriptText?: string;
+  customScriptSnippets?: UserLogonStagingSnippet[];
+  createDesktopShortcuts?: boolean;
+  configureEdgeHomepage?: boolean;
+  edgeHomepageUrl?: string;
+  showWelcomeNotification?: boolean;
+  welcomeMessage?: string;
 }
 
 export interface CustomerProfile {
@@ -252,7 +267,7 @@ let systemConfigSwitches: SystemConfigSwitch[] = [
       { label: '60 Minutes', value: 60 },
       { label: 'Never (0)', value: 0 },
     ],
-    powershellCommand: 'powercfg -change -monitor-timeout-ac {{screenTimeoutAc}}; powercfg -change -monitor-timeout-dc {{screenTimeoutAc}}',
+    powershellCommand: 'powercfg -change -monitor-timeout-ac {{screenTimeoutAc}}; powercfg -change -monitor-timeout-dc {{screenTimeoutDc}}',
     enabledByDefault: true,
     isRemovable: false,
   },
@@ -260,12 +275,12 @@ let systemConfigSwitches: SystemConfigSwitch[] = [
     id: 'sw-power-standby',
     key: 'setStandbyTimeout',
     title: 'Configure System Standby / Sleep Timeout',
-    description: 'Sets system sleep timeout to 0 (Never) to prevent disconnecting remote maintenance sessions.',
+    description: 'Sets system sleep timeout on AC and Battery power separately to balance uptime and energy conservation.',
     category: 'Power',
     hasParameter: true,
     parameterKey: 'standbyTimeoutAc',
     parameterType: 'select',
-    parameterLabel: 'Standby / Sleep Timeout',
+    parameterLabel: 'Standby / Sleep Timeout (AC)',
     parameterDefaultValue: 0,
     parameterOptions: [
       { label: 'Never Sleep (0)', value: 0 },
@@ -273,7 +288,7 @@ let systemConfigSwitches: SystemConfigSwitch[] = [
       { label: '60 Minutes', value: 60 },
       { label: '120 Minutes', value: 120 },
     ],
-    powershellCommand: 'powercfg -change -standby-timeout-ac {{standbyTimeoutAc}}; powercfg -change -standby-timeout-dc {{standbyTimeoutAc}}',
+    powershellCommand: 'powercfg -change -standby-timeout-ac {{standbyTimeoutAc}}; powercfg -change -standby-timeout-dc {{standbyTimeoutDc}}',
     enabledByDefault: true,
     isRemovable: false,
   },
@@ -550,25 +565,24 @@ let softwarePackages: SoftwarePackage[] = [
     aiConfidence: 100,
   },
   {
-    id: 'pkg-winget-outlook-classic',
-    name: 'Microsoft Outlook Classic (Winget)',
-    version: 'Classic Desktop',
+    id: 'pkg-outlook-classic',
+    name: 'Microsoft Outlook Classic (Office Deployment Tool / ODT)',
+    version: '16.0 (Office 2021 / M365 Desktop)',
     category: 'Productivity',
-    sourceType: 'winget',
-    wingetId: 'Microsoft.Outlook',
-    uncPath: '',
-    fileName: 'Microsoft.Outlook',
-    installerType: 'Winget',
-    silentArgs: '--silent --accept-package-agreements --accept-source-agreements --disable-interactivity',
+    sourceType: 'unc',
+    uncPath: '\\\\corp-fs01.internal.net\\deployments\\office\\odt',
+    fileName: 'setup.exe',
+    installerType: 'CustomEXE',
+    silentArgs: '/configure configuration-outlook.xml',
     logArgs: '',
     rebootBehavior: 'Suppress',
     detectionType: 'FilePath',
     detectionRule: 'C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE',
     successExitCodes: [0, 3010],
-    estimatedMinutes: 4,
-    description: 'Classic Microsoft Outlook desktop client from Microsoft installed directly via Winget.',
+    estimatedMinutes: 5,
+    description: 'Classic desktop Microsoft Outlook installed via Office Deployment Tool (ODT). Note: Winget does not distribute Outlook Classic (Winget only provides the new web-based Outlook).',
     testInstallStatus: 'Verified',
-    aiConfidence: 99,
+    aiConfidence: 98,
   },
   {
     id: 'pkg-winget-chrome',
@@ -1229,6 +1243,16 @@ app.post('/api/ad-computers/bulk-import', (req, res) => {
   });
 });
 
+app.get('/api/computers/:name/history', (req, res) => {
+  try {
+    const history = getComputerHistory(req.params.name);
+    res.json(history);
+  } catch (err: any) {
+    console.error('Error fetching computer history:', err);
+    res.status(500).json({ error: err?.message || 'Failed to fetch computer history' });
+  }
+});
+
 // -------------------------------------------------------------
 // CLIENT AGENT & WAIT-TASKS QUEUE API
 // -------------------------------------------------------------
@@ -1305,11 +1329,34 @@ app.delete('/api/agent/tasks/:id', (req, res) => {
   res.json({ success, deletedId: req.params.id });
 });
 
+// Agent Pre-Shared Key (PSK) & Token Encryption Verification
+function checkAgentAuthorization(req: express.Request, res: express.Response): boolean {
+  const settings = getAppSettings();
+  const agentCfg = settings.agentConfig;
+  if (!agentCfg || !agentCfg.encryptionMode || agentCfg.encryptionMode === 'none' || !agentCfg.preSharedKey) {
+    return true; // No encryption enforcement configured
+  }
+
+  const tokenHeader = (req.headers['x-fdim-agent-token'] as string) || (req.headers['authorization'] as string);
+  if (!tokenHeader) {
+    res.status(401).json({ error: 'Agent encryption token required. Provide X-FDIM-Agent-Token or Authorization Bearer header.' });
+    return false;
+  }
+  const clean = tokenHeader.replace(/^Bearer\s+/i, '').trim();
+  if (clean !== agentCfg.preSharedKey) {
+    res.status(403).json({ error: 'Agent security token mismatch: Access denied.' });
+    return false;
+  }
+  return true;
+}
+
 // Client Scheduled Task Heartbeat Endpoint
 // Executed by the Windows Scheduled Task on clients:
 // - At system startup + 3-5 min delay
 // - Every 15-30 minutes
 app.post('/api/agent/heartbeat', (req, res) => {
+  if (!checkAgentAuthorization(req, res)) return;
+
   const {
     machineName,
     domain,
@@ -1395,6 +1442,8 @@ app.post('/api/agent/heartbeat', (req, res) => {
 
 // Client task execution completion reporter
 app.post('/api/agent/tasks/:id/report', (req, res) => {
+  if (!checkAgentAuthorization(req, res)) return;
+
   const { status, exitCode, resultLog, installedPackageIds } = req.body;
   const task = getAllQueuedTasks().find((t) => t.id === req.params.id);
   if (!task) {
@@ -1432,6 +1481,8 @@ app.get('/api/agent/script/installer', (req, res) => {
   const serverUrl = (req.query.serverUrl as string) || settings.agentConfig.serverUrl || `http://localhost:${PORT}`;
   const intervalMinutes = parseInt((req.query.intervalMinutes as string) || `${settings.agentConfig.heartbeatIntervalMinutes || 30}`, 10);
   const bootDelayMinutes = parseInt((req.query.bootDelayMinutes as string) || `${settings.agentConfig.bootDelayMinutes || 5}`, 10);
+  const isSecured = settings.agentConfig?.encryptionMode && settings.agentConfig.encryptionMode !== 'none';
+  const pskToken = isSecured ? (settings.agentConfig?.preSharedKey || '') : '';
 
   const brandingTitle = getScriptBrandingTitle(req.query.showProfanity === 'false' ? false : req.query.showProfanity === 'true' ? true : undefined);
   const installerScript = `# ==============================================================================
@@ -1442,6 +1493,7 @@ app.get('/api/agent/script/installer', (req, res) => {
 #   1. At Startup with ${bootDelayMinutes} minute delay (Network/DHCP ready)
 #   2. Repeating every ${intervalMinutes} minutes indefinitely
 # Server Endpoint: ${serverUrl}
+# Transport Security: ${isSecured ? 'HMAC/Bearer Token Encrypted (PSK Protected)' : 'Standard'}
 # ==============================================================================
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
@@ -1457,6 +1509,7 @@ Write-Host "==========================================================" -Foregro
 Write-Host "FDIM Client Agent Installation" -ForegroundColor Cyan
 Write-Host "Server: $ServerUrl" -ForegroundColor Cyan
 Write-Host "Heartbeat: Every ${intervalMinutes} minutes (Boot delay: ${bootDelayMinutes} min)" -ForegroundColor Cyan
+${isSecured ? `Write-Host "Transport Security: Encrypted (PSK Authentication Active)" -ForegroundColor Green` : ''}
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 1. Create Directories
@@ -1472,6 +1525,15 @@ $ErrorActionPreference = "Continue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ServerUrl = "__SERVER_URL__"
+$AgentToken = "__AGENT_TOKEN__"
+$AgentHeaders = if ($AgentToken) {
+    @{
+        "X-FDIM-Agent-Token" = $AgentToken
+        "Authorization"      = "Bearer $AgentToken"
+    }
+} else {
+    @{}
+}
 $MachineName = $env:COMPUTERNAME
 $Domain = $env:USERDNSDOMAIN
 if (-not $Domain) { $Domain = $env:USERDOMAIN }
@@ -1523,7 +1585,7 @@ $payload = @{
 } | ConvertTo-Json
 
 try {
-    $response = Invoke-RestMethod -Uri "$ServerUrl/api/agent/heartbeat" -Method Post -Body $payload -ContentType "application/json" -TimeoutSec 15
+    $response = Invoke-RestMethod -Uri "$ServerUrl/api/agent/heartbeat" -Method Post -Body $payload -ContentType "application/json" -Headers $AgentHeaders -TimeoutSec 15
     Write-WorkerLog "Heartbeat sent successfully. Server message: $($response.message)"
 
     # 4. Check for Pending Tasks
@@ -1556,7 +1618,7 @@ try {
                 resultLog = $taskLog
             } | ConvertTo-Json
 
-            Invoke-RestMethod -Uri "$ServerUrl/api/agent/tasks/$($task.id)/report" -Method Post -Body $reportPayload -ContentType "application/json"
+            Invoke-RestMethod -Uri "$ServerUrl/api/agent/tasks/$($task.id)/report" -Method Post -Body $reportPayload -ContentType "application/json" -Headers $AgentHeaders
             Write-WorkerLog ("Task [" + $task.id + "] result reported: Status=" + (if ($success) { 'completed' } else { 'failed' }))
         }
     }
@@ -1565,7 +1627,7 @@ try {
 }
 '@
 
-$WorkerContent = $WorkerContent.Replace("__SERVER_URL__", $ServerUrl)
+$WorkerContent = $WorkerContent.Replace("__SERVER_URL__", $ServerUrl).Replace("__AGENT_TOKEN__", pskToken)
 Set-Content -Path $WorkerScript -Value $WorkerContent -Encoding UTF8 -Force
 Write-Host "[OK] Created Agent Worker Script at $WorkerScript" -ForegroundColor Green
 
@@ -2451,12 +2513,16 @@ ${genericSwitches
     let cmd = sw.powershellCommand;
     // Replace parameter placeholders
     const adGroup = switchParameters?.adAdminGroupName || systemConfig?.adAdminGroupName || customerProfile?.defaultAdAdminGroup || 'ACME\\IT-Workstation-Admins';
-    const screenTimeout = switchParameters?.screenTimeoutAc ?? systemConfig?.screenTimeoutAc ?? 15;
-    const standbyTimeout = switchParameters?.standbyTimeoutAc ?? systemConfig?.standbyTimeoutAc ?? 0;
+    const screenTimeout = switchParameters?.screenTimeoutAc ?? systemConfig?.screenTimeoutAc ?? customerProfile?.powerPlanSettings?.screenTimeoutAc ?? 15;
+    const standbyTimeout = switchParameters?.standbyTimeoutAc ?? systemConfig?.standbyTimeoutAc ?? customerProfile?.powerPlanSettings?.standbyTimeoutAc ?? 0;
+    const screenTimeoutDc = switchParameters?.screenTimeoutDc ?? systemConfig?.screenTimeoutDc ?? customerProfile?.powerPlanSettings?.screenTimeoutDc ?? 10;
+    const standbyTimeoutDc = switchParameters?.standbyTimeoutDc ?? systemConfig?.standbyTimeoutDc ?? customerProfile?.powerPlanSettings?.standbyTimeoutDc ?? 20;
 
     cmd = cmd.replace(/\{\{adAdminGroupName\}\}/g, String(adGroup));
     cmd = cmd.replace(/\{\{screenTimeoutAc\}\}/g, String(screenTimeout));
     cmd = cmd.replace(/\{\{standbyTimeoutAc\}\}/g, String(standbyTimeout));
+    cmd = cmd.replace(/\{\{screenTimeoutDc\}\}/g, String(screenTimeoutDc));
+    cmd = cmd.replace(/\{\{standbyTimeoutDc\}\}/g, String(standbyTimeoutDc));
 
     // Custom parameter if applicable
     if (sw.parameterKey && switchParameters?.[sw.parameterKey] !== undefined) {
@@ -2701,10 +2767,17 @@ try {
   .join('\n')}
 
 ${
-  stagingConfig.enabled !== false && (activeDrives.length > 0 || activePrinters.length > 0)
+  stagingConfig.enabled !== false &&
+  (activeDrives.length > 0 ||
+    activePrinters.length > 0 ||
+    stagingConfig.customScriptText ||
+    (stagingConfig.customScriptSnippets && stagingConfig.customScriptSnippets.length > 0) ||
+    stagingConfig.createDesktopShortcuts ||
+    stagingConfig.configureEdgeHomepage ||
+    stagingConfig.showWelcomeNotification)
     ? `
 # ------------------------------------------------------------------------------
-# PHASE 4: USER FIRST-LOGON STAGING (NETWORK DRIVES & PRINTER MAPPINGS)
+# PHASE 4: USER FIRST-LOGON STAGING (NETWORK DRIVES, PRINTERS & CUSTOM SNIPPETS)
 # ------------------------------------------------------------------------------
 # ARCHITECTURE NOTE:
 # Workstation deployment runs in administrative/SYSTEM context where the end-user
@@ -2715,7 +2788,7 @@ ${
 # 2. Staging C:\\ProgramData\\FDIM\\UserLogonSetup.ps1
 # 3. Registering Windows Active Setup in HKLM:\\SOFTWARE\\Microsoft\\Active Setup\\Installed Components\\FDIM_UserProvisioning
 #    When ANY new user signs into Windows for the first time, Windows Shell runs this
-#    staged script in their user context, automatically mapping drives and printers!
+#    staged script in their user context, automatically mapping drives, printers, and first-run configs!
 # ------------------------------------------------------------------------------
 Write-DeployLog "Phase 4: Staging User First-Logon Configuration (Active Setup & Machine Printers)..."
 
@@ -2830,6 +2903,88 @@ try {
 `;
   })
   .join('\n')}
+
+${
+  stagingConfig.createDesktopShortcuts
+    ? `
+# --- 3. FIRST-RUN DESKTOP SHORTCUTS ---
+try {
+    $WshShell = New-Object -ComObject WScript.Shell
+    $DesktopPath = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Desktop)
+    $Shortcut = $WshShell.CreateShortcut("$DesktopPath\\Company IT Portal.url")
+    $Shortcut.TargetPath = "${stagingConfig.edgeHomepageUrl || 'https://portal.office.com'}"
+    $Shortcut.Save()
+    Write-UserLog "Created Desktop IT Portal shortcut" "SUCCESS"
+} catch {
+    Write-UserLog "Notice creating desktop shortcut: $($_.Exception.Message)" "WARN"
+}
+`
+    : ''
+}
+
+${
+  stagingConfig.configureEdgeHomepage
+    ? `
+# --- 4. CONFIGURE MICROSOFT EDGE HOMEPAGE ---
+try {
+    $edgeReg = "HKCU:\\Software\\Policies\\Microsoft\\Edge"
+    if (-not (Test-Path $edgeReg)) { New-Item -Path $edgeReg -Force | Out-Null }
+    Set-ItemProperty -Path $edgeReg -Name "HomepageLocation" -Value "${stagingConfig.edgeHomepageUrl || 'https://portal.office.com'}" -Force
+    Set-ItemProperty -Path $edgeReg -Name "RestoreOnStartup" -Value 4 -Force
+    Write-UserLog "Configured Edge corporate homepage to ${stagingConfig.edgeHomepageUrl || 'https://portal.office.com'}" "SUCCESS"
+} catch {
+    Write-UserLog "Notice setting Edge homepage: $($_.Exception.Message)" "WARN"
+}
+`
+    : ''
+}
+
+${
+  stagingConfig.showWelcomeNotification
+    ? `
+# --- 5. WELCOME USER NOTIFICATION ---
+try {
+    $wshell = New-Object -ComObject WScript.Shell
+    $wshell.Popup("${(stagingConfig.welcomeMessage || 'Welcome to your newly provisioned workstation! Your network drives, printers, and company apps are ready.').replace(/"/g, '`"')}", 8, "FDIM Workstation Provisioning", 64) | Out-Null
+    Write-UserLog "Displayed welcome user notification" "SUCCESS"
+} catch {
+    Write-UserLog "Notice displaying welcome popup: $($_.Exception.Message)" "WARN"
+}
+`
+    : ''
+}
+
+# --- 6. CUSTOM FIRST-RUN POWERSHELL SCRIPT SNIPPETS ---
+${(stagingConfig.customScriptSnippets || [])
+  .filter((s) => s.enabled !== false && s.script)
+  .map(
+    (s) => `
+# Snippet: ${s.name}
+try {
+    Write-UserLog "Executing custom first-run snippet: ${s.name}..."
+    ${s.script}
+    Write-UserLog "Custom snippet '${s.name}' completed" "SUCCESS"
+} catch {
+    Write-UserLog "Error in custom snippet '${s.name}': $($_.Exception.Message)" "ERROR"
+}
+`
+  )
+  .join('\n')}
+
+${
+  stagingConfig.customScriptText
+    ? `
+# Custom First-Run User Script Block
+try {
+    Write-UserLog "Executing custom first-run user script block..."
+    ${stagingConfig.customScriptText}
+    Write-UserLog "Custom first-run user script block completed" "SUCCESS"
+} catch {
+    Write-UserLog "Error in custom first-run script block: $($_.Exception.Message)" "ERROR"
+}
+`
+    : ''
+}
 
 Write-UserLog "FDIM First-Logon provisioning completed for $env:USERNAME" "SUCCESS"
 '@

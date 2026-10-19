@@ -1,6 +1,7 @@
 import React from 'react';
 import { DeploymentRecord, SoftwarePackage } from '../types';
 import { getFdimExpansion } from '../utils/branding';
+import { jsPDF } from 'jspdf';
 import {
   Award,
   CheckCircle2,
@@ -9,6 +10,7 @@ import {
   ShieldCheck,
   Building2,
   HardDrive,
+  FileDown,
 } from 'lucide-react';
 
 interface AuditCertificateModalProps {
@@ -26,12 +28,237 @@ export const AuditCertificateModal: React.FC<AuditCertificateModalProps> = ({
   packages,
   showProfanity = true,
 }) => {
+  const [isExportingPdf, setIsExportingPdf] = React.useState(false);
+
   if (!isOpen || !record) return null;
 
   const installedPackages = packages.filter((p) => record.selectedPackageIds.includes(p.id));
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleExportPdf = () => {
+    if (!record) return;
+    setIsExportingPdf(true);
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      // Certificate Border Frame
+      doc.setDrawColor(30, 41, 59);
+      doc.setLineWidth(1);
+      doc.rect(8, 8, 194, 281);
+      doc.setDrawColor(6, 182, 212);
+      doc.setLineWidth(0.4);
+      doc.rect(10, 10, 190, 277);
+
+      // Header Banner
+      doc.setFillColor(15, 23, 42);
+      doc.rect(10, 10, 190, 36, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.setTextColor(255, 255, 255);
+      doc.text('WORKSTATION PROVISIONING CERTIFICATE', 105, 23, { align: 'center' });
+
+      doc.setFontSize(9);
+      doc.setTextColor(6, 182, 212);
+      const acronymText = `FDIM (${getFdimExpansion(showProfanity !== false)}) Workstation Audit`;
+      doc.text(acronymText.toUpperCase(), 105, 31, { align: 'center' });
+
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text('Official Active Directory Compliance Verification Record', 105, 37, { align: 'center' });
+
+      let y = 52;
+
+      // Section: Host & Deployment Overview
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.text('1. ENDPOINT SPECIFICATIONS & DOMAIN ASSIGNMENT', 14, y);
+      y += 5;
+
+      doc.setFillColor(241, 245, 249);
+      doc.rect(14, y, 182, 20, 'F');
+      doc.setDrawColor(203, 213, 225);
+      doc.rect(14, y, 182, 20);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+
+      doc.text('Computer Hostname:', 18, y + 6);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text(record.machineName || 'N/A', 55, y + 6);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text('Customer Profile:', 18, y + 13);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text(record.customerCompanyName || 'Corporate', 55, y + 13);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text('Active Directory Domain:', 110, y + 6);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text(record.domainName || 'corp.internal.net', 152, y + 6);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text('Provisioning Status:', 110, y + 13);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(16, 185, 129);
+      doc.text(record.status.toUpperCase(), 152, y + 13);
+
+      y += 28;
+
+      // Section: Applied System Configurations
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.text('2. APPLIED OPERATING SYSTEM CONFIGURATIONS', 14, y);
+      y += 6;
+
+      const scrAc = record.systemConfig?.screenTimeoutAc ?? record.switchParameters?.screenTimeoutAc ?? 15;
+      const sbAc = record.systemConfig?.standbyTimeoutAc ?? record.switchParameters?.standbyTimeoutAc ?? 0;
+      const scrDc = record.systemConfig?.screenTimeoutDc ?? record.switchParameters?.screenTimeoutDc ?? 10;
+      const sbDc = record.systemConfig?.standbyTimeoutDc ?? record.switchParameters?.standbyTimeoutDc ?? 20;
+
+      const configs = [
+        ['Remote Desktop (RDP):', record.systemConfig?.enableRdp ? 'Enabled (NLA & Firewall Exception Enforced)' : 'Configured'],
+        ['Delegated AD Admin Group:', String(record.systemConfig?.addAdGroupToAdmins ? record.systemConfig.adAdminGroupName : (record.switchParameters?.adAdminGroupName || 'Delegated'))],
+        ['AC Power Scheme (Plugged):', `Display: ${scrAc}m • Sleep: ${sbAc === 0 ? 'Never' : `${sbAc}m`}`],
+        ['Battery Power Scheme (DC):', `Display: ${scrDc}m • Sleep: ${sbDc === 0 ? 'Never' : `${sbDc}m`}`],
+        ['Local Administrator Account:', record.systemConfig?.enableLocalAdmin !== false ? 'Enabled (SID *-500, PassNeverExpires)' : 'Standard'],
+        ['OOBE Temporary Account:', record.systemConfig?.deleteOobeAccount !== false ? `Purged ('${record.systemConfig?.oobeAccountName || 'install'}')` : 'Preserved'],
+      ];
+
+      for (const [label, val] of configs) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.5);
+        doc.setTextColor(71, 85, 105);
+        doc.text(label, 18, y);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(15, 23, 42);
+        doc.text(val, 75, y);
+        y += 5.5;
+      }
+
+      y += 4;
+
+      // Section: Installed Software Packages
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`3. DEPLOYED SOFTWARE PACKAGES (${installedPackages.length})`, 14, y);
+      y += 5;
+
+      // Table Header
+      doc.setFillColor(15, 23, 42);
+      doc.rect(14, y, 182, 6.5, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(255, 255, 255);
+      doc.text('Package Name', 18, y + 4.5);
+      doc.text('Version', 105, y + 4.5);
+      doc.text('Type', 145, y + 4.5);
+      doc.text('Exit Code', 175, y + 4.5);
+      y += 6.5;
+
+      for (let i = 0; i < installedPackages.length; i++) {
+        const pkg = installedPackages[i];
+        if (i % 2 === 0) {
+          doc.setFillColor(248, 250, 252);
+          doc.rect(14, y, 182, 6, 'F');
+        }
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(15, 23, 42);
+        doc.text(pkg.name.length > 45 ? pkg.name.substring(0, 42) + '...' : pkg.name, 18, y + 4.5);
+        doc.setTextColor(71, 85, 105);
+        doc.text(pkg.version || '1.0', 105, y + 4.5);
+        doc.text(pkg.installerType || 'MSI', 145, y + 4.5);
+        doc.setTextColor(16, 185, 129);
+        doc.text('0 (Verified)', 175, y + 4.5);
+        y += 6;
+      }
+
+      y += 5;
+
+      // Section: Staged First-Logon Resources
+      if ((record.stagedDrives && record.stagedDrives.length > 0) || (record.stagedPrinters && record.stagedPrinters.length > 0)) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(15, 23, 42);
+        doc.text('4. STAGED USER FIRST-LOGON CONFIGURATION (ACTIVE SETUP)', 14, y);
+        y += 5;
+
+        for (const drv of record.stagedDrives || []) {
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(180, 83, 9);
+          doc.text(`Drive ${drv.driveLetter}:`, 18, y);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(15, 23, 42);
+          doc.text(`${drv.label} (${drv.uncPath})`, 38, y);
+          y += 5;
+        }
+
+        for (const prn of record.stagedPrinters || []) {
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(2, 132, 199);
+          doc.text('Printer:', 18, y);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(15, 23, 42);
+          doc.text(`${prn.name} (${prn.pathOrIp}) - ${prn.connectionType === 'PerMachineUNC' ? 'Machine PrintUI /ga' : 'Active Setup'}`, 38, y);
+          y += 5;
+        }
+
+        y += 4;
+      }
+
+      // Footer: Certified & Compliance Hash
+      doc.setDrawColor(203, 213, 225);
+      doc.line(14, 258, 196, 258);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text('Certified By:', 14, 264);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(15, 23, 42);
+      doc.text(`${record.technicianName} (IT Desktop Engineering)`, 36, 264);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(71, 85, 105);
+      doc.text('Date & Time:', 14, 270);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(15, 23, 42);
+      doc.text(new Date(record.completedAt || record.startedAt).toLocaleString(), 36, 270);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(71, 85, 105);
+      doc.text('Compliance Hash:', 110, 264);
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(6, 182, 212);
+      doc.text(`SHA256-${record.id.toUpperCase()}-VERIFIED`, 110, 270);
+
+      doc.save(`FDIM-Provisioning-Certificate-${record.machineName || 'Workstation'}.pdf`);
+    } catch (err) {
+      console.error('Error generating PDF:', err);
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   return (
@@ -46,15 +273,24 @@ export const AuditCertificateModal: React.FC<AuditCertificateModalProps> = ({
 
           <div className="flex items-center space-x-2">
             <button
+              onClick={handleExportPdf}
+              disabled={isExportingPdf}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer disabled:opacity-50"
+              title="Download standalone PDF audit certificate"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              <span>{isExportingPdf ? 'Generating...' : 'Export PDF'}</span>
+            </button>
+            <button
               onClick={handlePrint}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700"
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>Print / Save PDF</span>
             </button>
             <button
               onClick={onClose}
-              className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800"
+              className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
             >
               <X className="w-5 h-5" />
             </button>

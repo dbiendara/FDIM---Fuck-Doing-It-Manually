@@ -71,6 +71,30 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
   const [isQueueingBulk, setIsQueueingBulk] = useState(false);
   const [bulkDeployFeedback, setBulkDeployFeedback] = useState<string | null>(null);
 
+  // Computer History modal
+  const [historyComputerName, setHistoryComputerName] = useState<string | null>(null);
+  const [historyData, setHistoryData] = useState<any | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historyTab, setHistoryTab] = useState<'timeline' | 'deployments' | 'tasks'>('timeline');
+
+  const handleOpenHistory = async (name: string) => {
+    setHistoryComputerName(name);
+    setIsLoadingHistory(true);
+    setHistoryData(null);
+    setHistoryTab('timeline');
+    try {
+      const res = await fetch(`/api/computers/${encodeURIComponent(name)}/history`);
+      if (res.ok) {
+        const data = await res.json();
+        setHistoryData(data);
+      }
+    } catch (err) {
+      console.error('Error fetching computer history:', err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
   const fetchComputers = async () => {
     setIsLoading(true);
     try {
@@ -610,6 +634,15 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end space-x-1.5">
                           <button
+                            onClick={() => handleOpenHistory(comp.name)}
+                            className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/80 font-semibold text-[11px] transition-colors flex items-center space-x-1 cursor-pointer"
+                            title="View complete software installation history and audit timeline for this machine"
+                          >
+                            <Clock className="w-3 h-3 text-cyan-400" />
+                            <span>History</span>
+                          </button>
+
+                          <button
                             onClick={() => onOpenQuickDeployForMachine(comp.name, cust)}
                             className="px-2.5 py-1 rounded-lg bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800/60 font-semibold text-[11px] transition-colors"
                             title="Deploy software to this machine right now"
@@ -804,6 +837,266 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: Detailed Computer History & Software Installation Audit */}
+      {historyComputerName && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full flex flex-col max-h-[90vh] shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/70">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-cyan-950 border border-cyan-800 text-cyan-400 flex items-center justify-center font-bold">
+                  <Monitor className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h2 className="text-base font-bold text-white font-mono">
+                      {historyComputerName}
+                    </h2>
+                    <span className="text-[10px] px-2 py-0.5 rounded font-mono font-semibold bg-cyan-950 text-cyan-300 border border-cyan-800">
+                      Workstation History
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Chronological installation audit trail: When packages were deployed, which method was used, and associated compliance records.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setHistoryComputerName(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Quick Stats Ribbon */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-slate-950/40 border-b border-slate-800/80 text-xs">
+              <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
+                <span className="text-[10px] text-slate-400 uppercase font-mono block">Installed Packages</span>
+                <strong className="text-emerald-400 text-sm font-mono">
+                  {historyData?.timeline?.length || 0} applications
+                </strong>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
+                <span className="text-[10px] text-slate-400 uppercase font-mono block">Staging Runs</span>
+                <strong className="text-cyan-400 text-sm font-mono">
+                  {historyData?.deployments?.length || 0} run(s)
+                </strong>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
+                <span className="text-[10px] text-slate-400 uppercase font-mono block">Agent Tasks</span>
+                <strong className="text-purple-400 text-sm font-mono">
+                  {historyData?.tasks?.length || 0} task(s)
+                </strong>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
+                <span className="text-[10px] text-slate-400 uppercase font-mono block">Agent Status</span>
+                <strong className="text-white text-xs flex items-center space-x-1.5 mt-0.5">
+                  <span className={`w-2 h-2 rounded-full ${historyData?.computer?.agentInstalled ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                  <span>{historyData?.computer?.agentInstalled ? `Active v${historyData.computer.agentVersion || '1.4'}` : 'Not Installed'}</span>
+                </strong>
+              </div>
+            </div>
+
+            {/* Navigation Tabs */}
+            <div className="flex border-b border-slate-800 bg-slate-950/20 px-5 text-xs font-semibold">
+              <button
+                onClick={() => setHistoryTab('timeline')}
+                className={`py-3 px-4 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
+                  historyTab === 'timeline'
+                    ? 'border-cyan-500 text-cyan-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Clock className="w-4 h-4" />
+                <span>Installation Timeline ({historyData?.timeline?.length || 0})</span>
+              </button>
+
+              <button
+                onClick={() => setHistoryTab('deployments')}
+                className={`py-3 px-4 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
+                  historyTab === 'deployments'
+                    ? 'border-cyan-500 text-cyan-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>Provisioning Runs ({historyData?.deployments?.length || 0})</span>
+              </button>
+
+              <button
+                onClick={() => setHistoryTab('tasks')}
+                className={`py-3 px-4 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
+                  historyTab === 'tasks'
+                    ? 'border-cyan-500 text-cyan-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Radio className="w-4 h-4 text-purple-400" />
+                <span>Autonomous Agent Tasks ({historyData?.tasks?.length || 0})</span>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {isLoadingHistory ? (
+                <div className="py-16 text-center">
+                  <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin mx-auto mb-3" />
+                  <p className="text-xs text-slate-400 font-mono">Loading computer audit history...</p>
+                </div>
+              ) : historyTab === 'timeline' ? (
+                /* TAB 1: INSTALLATION TIMELINE */
+                <div>
+                  {!historyData?.timeline || historyData.timeline.length === 0 ? (
+                    <div className="py-12 text-center text-slate-500 text-xs">
+                      No software installation records found for {historyComputerName}.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 pb-1">
+                        <span>Chronological log of installed software packages & deployment origin</span>
+                        <span className="font-mono text-[10px]">Newest First</span>
+                      </div>
+
+                      <div className="border border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-800/80 bg-slate-950">
+                        {historyData.timeline.map((item: any, idx: number) => (
+                          <div key={item.id || idx} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 hover:bg-slate-900/60 transition-colors">
+                            <div className="flex items-start space-x-3">
+                              <div className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+                                <PackageCheck className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="flex items-center space-x-2">
+                                  <strong className="text-xs text-white font-medium">{item.packageName}</strong>
+                                  <span className="text-[10px] text-slate-400 font-mono">v{item.packageVersion}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 flex items-center space-x-2 mt-0.5">
+                                  <span className="font-mono text-[10px] text-cyan-400">
+                                    {new Date(item.installedAt).toLocaleString()}
+                                  </span>
+                                  <span>•</span>
+                                  <span className="text-slate-500">Technician: {item.technician}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center space-x-2 shrink-0 sm:self-center">
+                              <span
+                                className={`text-[10px] px-2 py-0.5 rounded font-mono font-medium ${
+                                  item.method === 'ODT Click-to-Run'
+                                    ? 'bg-indigo-950 text-indigo-300 border border-indigo-800'
+                                    : item.method === 'Winget'
+                                    ? 'bg-sky-950 text-sky-300 border border-sky-800'
+                                    : item.method === 'Quick Deploy'
+                                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                                    : item.method === 'Agent Task'
+                                    ? 'bg-purple-950 text-purple-300 border border-purple-800'
+                                    : 'bg-cyan-950 text-cyan-300 border border-cyan-800'
+                                }`}
+                              >
+                                {item.method}
+                              </span>
+
+                              <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                                ExitCode {item.exitCode ?? 0}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : historyTab === 'deployments' ? (
+                /* TAB 2: PROVISIONING RUNS & CERTIFICATES */
+                <div>
+                  {!historyData?.deployments || historyData.deployments.length === 0 ? (
+                    <div className="py-12 text-center text-slate-500 text-xs">
+                      No full provisioning runs recorded yet for this workstation.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {historyData.deployments.map((dep: any) => (
+                        <div key={dep.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                              <strong className="text-xs text-white">{dep.customerCompanyName}</strong>
+                              <span className="text-[10px] text-slate-400 font-mono">({dep.domainName})</span>
+                            </div>
+                            <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                              {dep.status}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 flex items-center space-x-3 font-mono">
+                            <span>Started: {new Date(dep.startedAt).toLocaleString()}</span>
+                            <span>•</span>
+                            <span>Technician: {dep.technicianName}</span>
+                            <span>•</span>
+                            <span>Packages: {dep.selectedPackageIds?.length || 0}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* TAB 3: AGENT TASKS */
+                <div>
+                  {!historyData?.tasks || historyData.tasks.length === 0 ? (
+                    <div className="py-12 text-center text-slate-500 text-xs">
+                      No background agent tasks queued or executed for this machine.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {historyData.tasks.map((task: any) => (
+                        <div key={task.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <strong className="text-xs text-white">{task.title}</strong>
+                            <span
+                              className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${
+                                task.status === 'completed'
+                                  ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                  : task.status === 'failed'
+                                  ? 'bg-rose-950 text-rose-400 border border-rose-800'
+                                  : 'bg-amber-950 text-amber-400 border border-amber-800'
+                              }`}
+                            >
+                              {task.status.toUpperCase()}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            Created: {new Date(task.createdAt).toLocaleString()} • Type: {task.taskType} • Mode: {task.executionMode}
+                          </p>
+                          {task.resultLog && (
+                            <pre className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-mono text-slate-300 max-h-32 overflow-y-auto">
+                              {task.resultLog}
+                            </pre>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-800 flex items-center justify-between bg-slate-950/80">
+              <span className="text-[11px] text-slate-400 font-mono">
+                Host: {historyComputerName}
+              </span>
+              <button
+                onClick={() => setHistoryComputerName(null)}
+                className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium transition-colors cursor-pointer"
+              >
+                Close History
+              </button>
+            </div>
           </div>
         </div>
       )}

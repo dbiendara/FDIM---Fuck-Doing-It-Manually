@@ -240,19 +240,21 @@ export const PackageLibrary: React.FC<PackageLibraryProps> = ({
       setEstimatedMinutes(2);
       setDescription('Universal multimedia player installed via Winget without UNC network share.');
       setHasConfigFile(false);
-    } else if (type === 'winget-outlook') {
-      setSourceType('winget');
-      setName('Microsoft Outlook Classic (Winget)');
-      setWingetId('Microsoft.Outlook');
-      setVersion('Classic Desktop');
+    } else if (type === 'odt-outlook' || type === 'winget-outlook') {
+      setSourceType('unc');
+      setName('Microsoft Outlook Classic (Office Deployment Tool / ODT)');
+      setWingetId('');
+      setVersion('16.0 Desktop');
       setCategory('Productivity');
-      setInstallerType('Winget');
-      setSilentArgs('--silent --accept-package-agreements --accept-source-agreements --disable-interactivity');
+      setUncPath('\\\\corp-fs01.internal.net\\deployments\\office\\odt');
+      setFileName('setup.exe');
+      setInstallerType('CustomEXE');
+      setSilentArgs('/configure configuration-outlook.xml');
       setDetectionType('FilePath');
       setDetectionRule('C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE');
       setSuccessExitCodes('0, 3010');
-      setEstimatedMinutes(4);
-      setDescription('Classic desktop Microsoft Outlook installed directly via Windows Package Manager.');
+      setEstimatedMinutes(5);
+      setDescription('Classic desktop Microsoft Outlook installed via Office Deployment Tool (ODT). Note: Winget does not distribute Outlook Classic (Winget only provides the new web-based Outlook).');
       setHasConfigFile(false);
     } else if (type === 'winget-chrome') {
       setSourceType('winget');
@@ -514,10 +516,11 @@ export const PackageLibrary: React.FC<PackageLibraryProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => applyPreset('winget-outlook')}
-                    className="text-xs px-2.5 py-1 rounded-lg bg-sky-950/60 border border-sky-800 text-sky-300 hover:bg-sky-900 transition-colors font-mono cursor-pointer"
+                    onClick={() => applyPreset('odt-outlook')}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-indigo-950/60 border border-indigo-800 text-indigo-300 hover:bg-indigo-900 transition-colors font-mono cursor-pointer"
+                    title="Office Deployment Tool Click-to-Run (Winget does not distribute Outlook Classic)"
                   >
-                    📦 Outlook Classic (Microsoft.Outlook)
+                    💼 Outlook Classic (ODT / UNC)
                   </button>
                   <button
                     type="button"

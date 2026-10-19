@@ -55,6 +55,15 @@ export interface UserLogonStagingConfig {
   activeSetupKey?: string; // Default: "FDIM_UserProvisioning"
   scheduledTaskFallback?: boolean; // Register at-logon task as backup
   cleanUpAfterFirstRun?: boolean;
+  // First-run enhancements & custom script snippets
+  customScriptText?: string; // Custom PowerShell code executed at user logon
+  customScriptSnippets?: Array<{ id: string; name: string; script: string; enabled: boolean }>;
+  createDesktopShortcuts?: boolean;
+  configureEdgeHomepage?: boolean;
+  edgeHomepageUrl?: string;
+  enableDarkTheme?: boolean;
+  showWelcomeNotification?: boolean;
+  welcomeMessage?: string;
 }
 
 export interface CustomerProfile {
@@ -69,6 +78,9 @@ export interface CustomerProfile {
     enabled?: boolean;
     screenTimeoutAc: number;
     standbyTimeoutAc: number;
+    screenTimeoutDc?: number; // Battery monitor timeout
+    standbyTimeoutDc?: number; // Battery standby timeout
+    hibernateTimeoutDc?: number; // Battery hibernate timeout
   };
   localAdminSettings?: {
     enableLocalAdmin: boolean;
@@ -96,7 +108,7 @@ export interface SystemConfigSwitch {
   category: 'RemoteAccess' | 'Security' | 'Power' | 'Network' | 'Optimization' | 'Custom';
   powershellCommand: string;
   hasParameter?: boolean;
-  parameterKey?: string; // e.g. "adAdminGroupName", "screenTimeoutAc", "standbyTimeoutAc", "customParam", "localAdminPassword", "oobeAccountName"
+  parameterKey?: string; // e.g. "adAdminGroupName", "screenTimeoutAc", "standbyTimeoutAc", "screenTimeoutDc", "standbyTimeoutDc"
   parameterType?: 'text' | 'number' | 'select';
   parameterLabel?: string;
   parameterDefaultValue?: string | number;
@@ -112,6 +124,9 @@ export interface SystemConfigSettings {
   setPowerPlan: boolean;
   screenTimeoutAc: number;
   standbyTimeoutAc: number;
+  screenTimeoutDc?: number;
+  standbyTimeoutDc?: number;
+  hibernateTimeoutDc?: number;
   // Local Administrator Account Management
   enableLocalAdmin?: boolean;
   localAdminPassword?: string;
@@ -120,6 +135,20 @@ export interface SystemConfigSettings {
   deleteOobeAccount?: boolean;
   oobeAccountName?: string; // Default: 'install'
   removeOobeProfile?: boolean; // Default: true
+}
+
+export interface ComputerInstallationHistoryItem {
+  id: string;
+  machineName: string;
+  packageName: string;
+  packageVersion: string;
+  category?: string;
+  installedAt: string;
+  method: 'FDIM Staging' | 'Quick Deploy' | 'Agent Task' | 'Winget' | 'ODT Click-to-Run';
+  status: 'Success' | 'Failed';
+  exitCode?: number;
+  technician: string;
+  deploymentRecordId?: string;
 }
 
 export interface ActiveSystemConfigState {
@@ -197,6 +226,9 @@ export interface AppSettings {
     heartbeatIntervalMinutes: number; // e.g. 30
     bootDelayMinutes: number; // e.g. 5
     serverUrl: string; // e.g. "http://fdim.corp.internal:3000"
+    encryptionMode?: 'none' | 'token-bearer' | 'hmac-sha256';
+    preSharedKey?: string; // 256-bit agent secret key / PSK
+    enforceHttps?: boolean;
   };
   corporateColors?: CorporateColorsConfig;
 }

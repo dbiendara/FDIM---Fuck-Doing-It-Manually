@@ -165,6 +165,9 @@ export function seedInitialDataIfEmpty(
       heartbeatIntervalMinutes: 30,
       bootDelayMinutes: 5,
       serverUrl: 'http://fdim.corp.internal:3000',
+      encryptionMode: 'token-bearer',
+      preSharedKey: 'fdim_sec_a7f92e41c88d30e15b6782fa901c34ef',
+      enforceHttps: false,
     },
     corporateColors: {
       primaryColor: '#06b6d4',
@@ -174,6 +177,16 @@ export function seedInitialDataIfEmpty(
       customCssVarEnabled: true,
     },
   };
+
+  // Migration: Upgrade legacy pkg-winget-outlook-classic to ODT UNC package if present
+  const legacyOutlook = db.prepare('SELECT data FROM packages WHERE id = ?').get('pkg-winget-outlook-classic') as { data: string } | undefined;
+  if (legacyOutlook) {
+    db.prepare('DELETE FROM packages WHERE id = ?').run('pkg-winget-outlook-classic');
+    const odtOutlook = initialPackages.find((p) => p.id === 'pkg-outlook-classic');
+    if (odtOutlook) {
+      db.prepare('INSERT OR REPLACE INTO packages (id, data, updated_at) VALUES (?, ?, ?)').run(odtOutlook.id, JSON.stringify(odtOutlook), new Date().toISOString());
+    }
+  }
 
   const settingsRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('global') as { value: string } | undefined;
   if (!settingsRow) {
@@ -339,6 +352,9 @@ export function getAppSettings(): AppSettings {
       heartbeatIntervalMinutes: 30,
       bootDelayMinutes: 5,
       serverUrl: 'http://fdim.corp.internal:3000',
+      encryptionMode: 'token-bearer',
+      preSharedKey: 'fdim_sec_a7f92e41c88d30e15b6782fa901c34ef',
+      enforceHttps: false,
     },
     corporateColors: {
       primaryColor: '#06b6d4',
@@ -826,5 +842,121 @@ export function getDatabaseMetadata() {
 
 export function getDatabaseFilePath(): string {
   return dbPath;
+}
+
+// -------------------------------------------------------------
+// COMPUTER HISTORY & INSTALLATION AUDIT TIMELINE
+// -------------------------------------------------------------
+
+export function getComputerHistory(machineName: string) {
+  const compRow = db.prepare('SELECT data FROM ad_computers WHERE LOWER(name) = LOWER(?)').get(machineName) as { data: string } | undefined;
+  const computer: ADComputer | null = compRow ? JSON.parse(compRow.data) : null;
+
+  // Deployments for this machine
+  const depRows = db.prepare('SELECT data FROM deployments WHERE LOWER(machine_name) = LOWER(?) ORDER BY started_at DESC').all(machineName) as Array<{ data: string }>;
+  const deployments: DeploymentRecord[] = depRows.map((r) => JSON.parse(r.data));
+
+  // Queued & completed agent tasks for this machine
+  const taskRows = db.prepare('SELECT data FROM queued_tasks WHERE LOWER(machine_name) = LOWER(?) ORDER BY created_at DESC').all(machineName) as Array<{ data: string }>;
+  const tasks: QueuedTask[] = taskRows.map((r) => JSON.parse(r.data));
+
+  // Packages map
+  const allPkgs = getAllPackages();
+  const pkgMap = new Map(allPkgs.map((p) => [p.id, p]));
+
+  // Build timeline of package installations
+  const installationTimeline: Array<{
+    id: string;
+    machineName: string;
+    packageName: string;
+    packageVersion: string;
+    category?: string;
+    installedAt: string;
+    method: 'FDIM Staging' | 'Quick Deploy' | 'Agent Task' | 'Winget' | 'ODT Click-to-Run';
+    status: 'Success' | 'Failed';
+    exitCode?: number;
+    technician: string;
+    deploymentRecordId?: string;
+  }> = [];
+
+  // 1. From deployments
+  for (const dep of deployments) {
+    const isQuick = dep.deploymentType === 'QuickSoftwareInstall';
+    const method = isQuick ? 'Quick Deploy' : 'FDIM Staging';
+    for (const pkgId of dep.selectedPackageIds || []) {
+      const pkg = pkgMap.get(pkgId);
+      const pkgMethod = pkg?.installerType === 'Winget' ? 'Winget' : (pkgId === 'pkg-outlook-classic' ? 'ODT Click-to-Run' : method);
+      installationTimeline.push({
+        id: `inst-${dep.id}-${pkgId}`,
+        machineName: dep.machineName,
+        packageName: pkg?.name || pkgId,
+        packageVersion: pkg?.version || '1.0',
+        category: pkg?.category || 'General',
+        installedAt: dep.completedAt || dep.startedAt,
+        method: pkgMethod,
+        status: dep.status === 'Completed' ? 'Success' : (dep.status === 'Failed' ? 'Failed' : 'Success'),
+        exitCode: 0,
+        technician: dep.technicianName || 'Domain Admin',
+        deploymentRecordId: dep.id,
+      });
+    }
+  }
+
+  // 2. From agent tasks
+  for (const task of tasks) {
+    if (task.status === 'completed' && task.payload?.packageIds) {
+      for (const pkgId of task.payload.packageIds) {
+        const pkg = pkgMap.get(pkgId);
+        // Avoid duplicate if already in timeline around same timestamp
+        const exists = installationTimeline.some((item) => item.packageName === (pkg?.name || pkgId) && Math.abs(new Date(item.installedAt).getTime() - new Date(task.completedAt || task.createdAt).getTime()) < 60000);
+        if (!exists) {
+          installationTimeline.push({
+            id: `inst-task-${task.id}-${pkgId}`,
+            machineName: task.machineName,
+            packageName: pkg?.name || pkgId,
+            packageVersion: pkg?.version || '1.0',
+            category: pkg?.category || 'General',
+            installedAt: task.completedAt || task.createdAt,
+            method: 'Agent Task',
+            status: 'Success',
+            exitCode: task.exitCode ?? 0,
+            technician: task.createdBy || 'Agent SYSTEM',
+          });
+        }
+      }
+    }
+  }
+
+  // 3. Fallback: If computer has installedPackageIds not yet in timeline
+  if (computer && Array.isArray(computer.installedPackageIds)) {
+    for (const pkgId of computer.installedPackageIds) {
+      const pkg = pkgMap.get(pkgId);
+      const name = pkg?.name || pkgId;
+      if (!installationTimeline.some((item) => item.packageName === name)) {
+        installationTimeline.push({
+          id: `inst-ad-${computer.id}-${pkgId}`,
+          machineName: computer.name,
+          packageName: name,
+          packageVersion: pkg?.version || 'Detected',
+          category: pkg?.category || 'Inventory',
+          installedAt: computer.lastSeen || new Date().toISOString(),
+          method: pkg?.sourceType === 'winget' ? 'Winget' : (pkgId === 'pkg-outlook-classic' ? 'ODT Click-to-Run' : 'FDIM Staging'),
+          status: 'Success',
+          exitCode: 0,
+          technician: 'Baseline Inventory',
+        });
+      }
+    }
+  }
+
+  // Sort newest first
+  installationTimeline.sort((a, b) => new Date(b.installedAt).getTime() - new Date(a.installedAt).getTime());
+
+  return {
+    computer,
+    timeline: installationTimeline,
+    deployments,
+    tasks,
+  };
 }
 
