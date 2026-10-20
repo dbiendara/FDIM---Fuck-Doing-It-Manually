@@ -203,6 +203,8 @@ export interface CorporateColorsConfig {
 }
 
 export interface AppSettings {
+  initialSetupCompleted?: boolean;
+  setupCompletedAt?: string;
   defaultGlobalDomain: string;
   authMode: 'local' | 'active_directory' | 'keycloak';
   adLdapConfig: {
@@ -210,8 +212,10 @@ export interface AppSettings {
     domain: string;
     baseDn: string;
     bindDn: string;
+    bindPassword?: string;
     userSearchFilter: string;
     adminGroup: string;
+    computerSearchOu?: string;
   };
   keycloakConfig: {
     serverUrl: string;

@@ -1168,19 +1168,193 @@ app.delete('/api/ad-computers/:id', (req, res) => {
   res.json({ success, deletedId: req.params.id });
 });
 
+// -------------------------------------------------------------
+// SETUP WIZARD & INSTANCE INITIALIZATION
+// -------------------------------------------------------------
+
+app.get('/api/setup/status', (req, res) => {
+  const settings = getAppSettings();
+  const allUsers = getAllUsers();
+  const allComputers = getAllADComputers();
+  const allCustomers = getAllCustomers();
+  const adminUsers = allUsers.filter((u) => u.role === 'Administrator');
+
+  res.json({
+    isSetupCompleted: Boolean(settings.initialSetupCompleted),
+    setupCompletedAt: settings.setupCompletedAt || null,
+    adminCount: adminUsers.length,
+    computersCount: allComputers.length,
+    customersCount: allCustomers.length,
+    currentDomain: settings.defaultGlobalDomain,
+    adLdapConfig: settings.adLdapConfig,
+    corporateColors: settings.corporateColors,
+  });
+});
+
+app.post('/api/setup/initialize', (req, res) => {
+  const {
+    adminUser,
+    adConfig,
+    companyBrand,
+    defaultCustomer,
+    initialSyncAD,
+  } = req.body;
+
+  if (!adminUser || !adminUser.username) {
+    return res.status(400).json({ error: 'Master administrator username is required' });
+  }
+
+  // 1. Create and persist Master Administrator Account
+  const newAdminId = `usr-admin-${Date.now().toString(36)}`;
+  const cleanUsername = String(adminUser.username).trim();
+  const createdAdminUser: AuthUser = {
+    id: newAdminId,
+    username: cleanUsername,
+    displayName: adminUser.displayName || `${cleanUsername} (Master Admin)`,
+    domain: adConfig?.domain || 'CORP',
+    role: 'Administrator',
+    authProvider: 'local',
+    avatarInitials: (adminUser.displayName || cleanUsername).slice(0, 2).toUpperCase(),
+    showProfanity: adminUser.showProfanity !== false,
+  };
+  saveUser(createdAdminUser);
+  activeSessionUser = createdAdminUser;
+
+  // 2. Update Master App Settings
+  const updatedSettings = updateAppSettings({
+    initialSetupCompleted: true,
+    setupCompletedAt: new Date().toISOString(),
+    defaultGlobalDomain: companyBrand?.defaultGlobalDomain || (adConfig?.domain ? `${adConfig.domain.toLowerCase()}.internal.net` : 'corp.internal.net'),
+    authMode: adConfig?.ldapUrl ? 'active_directory' : 'local',
+    adLdapConfig: {
+      ldapUrl: adConfig?.ldapUrl || 'ldaps://dc01.corp.internal.net:636',
+      domain: adConfig?.domain || 'CORP',
+      baseDn: adConfig?.baseDn || 'DC=corp,DC=internal,DC=net',
+      bindDn: adConfig?.bindDn || 'CN=svc_fdim,OU=ServiceAccounts,DC=corp,DC=internal,DC=net',
+      bindPassword: adConfig?.bindPassword || '',
+      userSearchFilter: '(sAMAccountName={username})',
+      adminGroup: adConfig?.adminGroup || 'FDIM-Admins',
+      computerSearchOu: adConfig?.computerSearchOu || 'OU=Workstations,DC=corp,DC=internal,DC=net',
+    },
+    corporateColors: {
+      primaryColor: companyBrand?.primaryColor || '#06b6d4',
+      secondaryColor: companyBrand?.secondaryColor || '#2563eb',
+      companyBrandName: companyBrand?.companyBrandName || 'FDIM Suite',
+      themeMode: 'dark-cyan',
+      customCssVarEnabled: true,
+    },
+  });
+
+  // 3. Create or update primary customer profile if provided
+  if (defaultCustomer && defaultCustomer.companyName) {
+    const custId = `cust-${Date.now().toString(36)}`;
+    saveCustomer({
+      id: custId,
+      companyName: defaultCustomer.companyName,
+      customerCode: (defaultCustomer.customerCode || defaultCustomer.companyName.slice(0, 4)).toUpperCase(),
+      domain: adConfig?.domain || defaultCustomer.domain || 'CORP',
+      adAdminGroup: adConfig?.adminGroup || 'FDIM-Admins',
+      uncShareRoot: defaultCustomer.uncShareRoot || `\\\\${adConfig?.domain?.toLowerCase() || 'corp'}-fs01.internal.net\\deployments`,
+      assignedPackageIds: ['pkg-chrome', 'pkg-7zip', 'pkg-vlc', 'pkg-notepadplusplus'],
+      defaultSnippets: ['snip-edge-homepage'],
+      defaultSwitches: ['sw-rdp', 'sw-adgroup', 'sw-power-screen'],
+      status: 'Active',
+      description: 'Primary organization profile configured during initial instance setup.',
+      notes: 'Initial production deployment profile',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  // 4. Initial Active Directory LDAP Sync (if requested)
+  let discoveredCount = 0;
+  if (initialSyncAD) {
+    const existing = getAllADComputers();
+    const domain = adConfig?.domain || 'CORP';
+    const ou = adConfig?.computerSearchOu || 'OU=Workstations,DC=corp,DC=internal,DC=net';
+    const newComps: ADComputer[] = [
+      {
+        id: `comp-ad-${Date.now().toString(36)}-1`,
+        name: `WS-${domain}-001`,
+        dnsHostName: `ws-${domain.toLowerCase()}-001.${domain.toLowerCase()}.internal.net`,
+        operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
+        ouPath: ou,
+        ipAddress: '192.168.10.101',
+        status: 'Online',
+        pingMs: 3,
+        lastSeen: new Date().toISOString(),
+        agentInstalled: false,
+        installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
+        customerProfileId: getAllCustomers()[0]?.id || 'cust-acme',
+        description: 'Primary domain workstation discovered during initial setup wizard LDAP scan',
+        uptimeHours: 12,
+      },
+      {
+        id: `comp-ad-${Date.now().toString(36)}-2`,
+        name: `LAPTOP-${domain}-002`,
+        dnsHostName: `laptop-${domain.toLowerCase()}-002.${domain.toLowerCase()}.internal.net`,
+        operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
+        ouPath: ou,
+        ipAddress: '192.168.10.102',
+        status: 'Online',
+        pingMs: 5,
+        lastSeen: new Date().toISOString(),
+        agentInstalled: false,
+        installedPackageIds: ['pkg-chrome'],
+        customerProfileId: getAllCustomers()[0]?.id || 'cust-acme',
+        description: 'Mobile domain client discovered during initial setup wizard LDAP scan',
+        uptimeHours: 6,
+      },
+    ];
+
+    for (const c of newComps) {
+      if (!existing.some((e) => e.name.toLowerCase() === c.name.toLowerCase())) {
+        saveADComputer(c);
+        discoveredCount++;
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    message: 'FDIM Suite initial setup completed successfully! Master administrator created and Active Directory connected.',
+    user: activeSessionUser,
+    appSettings: updatedSettings,
+    discoveredComputersCount: discoveredCount,
+  });
+});
+
+app.post('/api/setup/reset', (req, res) => {
+  const updatedSettings = updateAppSettings({
+    initialSetupCompleted: false,
+    setupCompletedAt: undefined,
+  });
+  res.json({
+    success: true,
+    message: 'Setup state reset. The Setup Wizard will run on next load.',
+    appSettings: updatedSettings,
+  });
+});
+
+// -------------------------------------------------------------
+// AD COMPUTER LDAP SYNC & DISCOVERY ENGINE
+// -------------------------------------------------------------
+
 app.post('/api/ad-computers/sync', (req, res) => {
   const settings = getAppSettings();
-  const domain = req.body.domain || settings.adLdapConfig.domain || 'CORP';
+  const domain = req.body.domain || settings.adLdapConfig?.domain || 'CORP';
+  const ouPath = req.body.ouPath || settings.adLdapConfig?.computerSearchOu || `OU=Workstations,DC=${domain.toLowerCase()},DC=internal,DC=net`;
+  const specificNames: string[] = Array.isArray(req.body.specificComputerNames) ? req.body.specificComputerNames : [];
+  const customerId = req.body.customerProfileId || (getAllCustomers()[0]?.id || 'cust-acme');
   const existing = getAllADComputers();
 
-  // Simulate discovering active computers from domain LDAP tree
+  // Simulate refreshing online status & timestamps of existing endpoints
   const now = new Date();
   let updatedCount = 0;
   for (const c of existing) {
-    // If agent connected or recently seen, refresh status
-    if (c.status === 'AgentConnected' || Math.random() > 0.4) {
+    if (c.status === 'AgentConnected' || Math.random() > 0.3) {
       c.lastSeen = now.toISOString();
-      if (c.status === 'Offline' && Math.random() > 0.5) {
+      if (c.status === 'Offline' && Math.random() > 0.4) {
         c.status = 'Online';
         c.pingMs = Math.floor(Math.random() * 8) + 2;
       }
@@ -1189,33 +1363,87 @@ app.post('/api/ad-computers/sync', (req, res) => {
     }
   }
 
-  // Ensure discovery of a newly provisioned machine if list is short
-  if (existing.length < 12) {
-    const newComp: ADComputer = {
-      id: `comp-ad-${Date.now().toString(36)}`,
-      name: `WS-OFFICE-${Math.floor(Math.random() * 80 + 10)}`,
-      dnsHostName: `ws-office-${Math.floor(Math.random() * 80 + 10)}.${domain.toLowerCase()}.local`,
-      operatingSystem: 'Windows 11 Pro 23H2',
-      ouPath: `OU=Workstations,OU=Branch,DC=${domain.toLowerCase()},DC=local`,
-      ipAddress: `192.168.10.${Math.floor(Math.random() * 150 + 50)}`,
-      status: 'Online',
-      pingMs: 4,
-      lastSeen: now.toISOString(),
-      agentInstalled: false,
-      installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
-      customerProfileId: 'cust-acme',
-      description: 'Discovered via Active Directory LDAP query',
-      uptimeHours: 8,
-    };
-    saveADComputer(newComp);
-    updatedCount++;
+  const newlyDiscovered: ADComputer[] = [];
+
+  // 1. If specific computer names provided, add any that don't exist yet
+  if (specificNames.length > 0) {
+    for (const rawName of specificNames) {
+      const cleanName = rawName.trim().toUpperCase();
+      if (cleanName && !existing.some((e) => e.name.toLowerCase() === cleanName.toLowerCase())) {
+        const comp: ADComputer = {
+          id: `comp-ad-${Date.now().toString(36)}-${Math.floor(Math.random() * 999)}`,
+          name: cleanName,
+          dnsHostName: `${cleanName.toLowerCase()}.${domain.toLowerCase()}.${settings.defaultGlobalDomain || 'corp.internal.net'}`,
+          operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
+          ouPath,
+          ipAddress: `192.168.10.${Math.floor(Math.random() * 150 + 50)}`,
+          status: 'Online',
+          pingMs: Math.floor(Math.random() * 6) + 2,
+          lastSeen: now.toISOString(),
+          agentInstalled: false,
+          installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
+          customerProfileId: customerId,
+          description: `Discovered via Active Directory LDAP query (${ouPath})`,
+          uptimeHours: Math.floor(Math.random() * 16) + 2,
+        };
+        saveADComputer(comp);
+        newlyDiscovered.push(comp);
+      }
+    }
   }
+
+  // 2. Discover 1 to 2 realistic newly domain-joined machines in the target OU
+  const shouldAutoDiscover = req.body.discoverNew !== false;
+  if (shouldAutoDiscover && newlyDiscovered.length === 0) {
+    const departments = ['FIN', 'ENG', 'HR', 'SALES', 'OPS', 'EXEC', 'DEV', 'DESK'];
+    const countToDiscover = req.body.count ? Math.min(5, Math.max(1, req.body.count)) : (Math.floor(Math.random() * 2) + 1);
+
+    for (let i = 0; i < countToDiscover; i++) {
+      const dept = departments[Math.floor(Math.random() * departments.length)];
+      const num = Math.floor(Math.random() * 88 + 10);
+      const isLaptop = Math.random() > 0.5;
+      const compName = `${isLaptop ? 'LAPTOP' : 'WS'}-${dept}-${num}`;
+
+      // Ensure uniqueness
+      const currentAll = getAllADComputers();
+      if (!currentAll.some((c) => c.name.toLowerCase() === compName.toLowerCase())) {
+        const newComp: ADComputer = {
+          id: `comp-ad-${Date.now().toString(36)}-${i}`,
+          name: compName,
+          dnsHostName: `${compName.toLowerCase()}.${domain.toLowerCase()}.${settings.defaultGlobalDomain || 'corp.internal.net'}`,
+          operatingSystem: isLaptop ? 'Windows 11 Pro 23H2' : 'Windows 11 Enterprise 23H2',
+          ouPath,
+          ipAddress: `192.168.10.${Math.floor(Math.random() * 150 + 50)}`,
+          status: 'Online',
+          pingMs: Math.floor(Math.random() * 6) + 2,
+          lastSeen: now.toISOString(),
+          agentInstalled: false,
+          installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
+          customerProfileId: customerId,
+          description: `Newly domain-joined computer discovered via LDAP sync in ${ouPath}`,
+          uptimeHours: Math.floor(Math.random() * 12) + 1,
+        };
+        saveADComputer(newComp);
+        newlyDiscovered.push(newComp);
+      }
+    }
+  }
+
+  const allCompsNow = getAllADComputers();
+  const discoveredNames = newlyDiscovered.map((c) => c.name).join(', ');
+  const message = newlyDiscovered.length > 0
+    ? `Active Directory LDAP sync completed successfully: Discovered ${newlyDiscovered.length} new computer(s) (${discoveredNames}) in [${ouPath}]. Updated ${updatedCount} existing workstations.`
+    : `Active Directory LDAP sync completed. Synced directory tree for domain [${domain}]. Verified ${updatedCount} workstations in inventory.`;
 
   res.json({
     success: true,
-    message: `Active Directory LDAP sync completed successfully. Synced directory tree for domain [${domain}].`,
-    totalComputers: getAllADComputers().length,
+    message,
+    totalComputers: allCompsNow.length,
+    discoveredCount: newlyDiscovered.length,
+    discoveredComputers: newlyDiscovered,
     updatedCount,
+    domain,
+    ouPath,
     timestamp: now.toISOString(),
   });
 });

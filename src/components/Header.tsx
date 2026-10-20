@@ -20,6 +20,7 @@ import {
   Menu,
   X,
   ExternalLink,
+  Wand2,
 } from 'lucide-react';
 import { AuthUser, AppSettings } from '../types';
 import { getFdimExpansion } from '../utils/branding';
@@ -48,6 +49,7 @@ interface HeaderProps {
   onOpenSettings?: () => void;
   onOpenLogin?: () => void;
   onToggleProfanity?: () => void;
+  onOpenSetupWizard?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -61,6 +63,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onOpenLogin,
   onToggleProfanity,
+  onOpenSetupWizard,
 }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -439,6 +442,36 @@ export const Header: React.FC<HeaderProps> = ({
                       </div>
                     </button>
 
+                    {onOpenSetupWizard && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onOpenSetupWizard();
+                          setIsDropdownOpen(false);
+                        }}
+                        className="w-full flex items-start space-x-3 p-2.5 rounded-xl text-left hover:bg-slate-800/70 text-slate-200 transition-colors cursor-pointer"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-900 to-blue-900 border border-cyan-700 flex items-center justify-center shrink-0 mt-0.5 text-cyan-300">
+                          <Wand2 className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-white flex items-center justify-between">
+                            <span className="flex items-center space-x-1.5">
+                              <span>Initial Setup Wizard</span>
+                              {!appSettings?.initialSetupCompleted && (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] bg-amber-500 text-slate-950 font-mono font-bold animate-pulse">
+                                  REQUIRED
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                            Re-run onboarding wizard, create master admin, and connect Active Directory
+                          </p>
+                        </div>
+                      </button>
+                    )}
+
                     {onToggleProfanity && (
                       <div className="pt-2 mt-1 border-t border-slate-800">
                         <button
@@ -475,6 +508,18 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Settings & Auth Action Buttons */}
             <div className="flex items-center space-x-1.5 pl-2 border-l border-slate-800">
+              {/* Highlighted Setup Wizard prompt if instance setup not completed */}
+              {!appSettings?.initialSetupCompleted && onOpenSetupWizard && (
+                <button
+                  type="button"
+                  onClick={onOpenSetupWizard}
+                  className="hidden md:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 text-xs font-bold shadow-md shadow-orange-500/20 hover:scale-105 transition-all cursor-pointer animate-pulse"
+                  title="Configure master admin and link Active Directory"
+                >
+                  <Wand2 className="w-3.5 h-3.5" />
+                  <span>Setup Wizard</span>
+                </button>
+              )}
               {onOpenSettings && (
                 <button
                   type="button"

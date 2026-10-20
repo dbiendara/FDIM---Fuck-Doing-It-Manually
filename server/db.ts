@@ -326,6 +326,7 @@ export function saveDeployment(dep: DeploymentRecord): DeploymentRecord {
 export function getAppSettings(): AppSettings {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('global') as { value: string } | undefined;
   const defaultSettings: AppSettings = {
+    initialSetupCompleted: false,
     defaultGlobalDomain: 'corp.internal.net',
     authMode: 'local',
     adLdapConfig: {
@@ -333,8 +334,10 @@ export function getAppSettings(): AppSettings {
       domain: 'CORP',
       baseDn: 'DC=corp,DC=internal,DC=net',
       bindDn: 'CN=svc_fdim,OU=ServiceAccounts,DC=corp,DC=internal,DC=net',
+      bindPassword: '',
       userSearchFilter: '(sAMAccountName={username})',
       adminGroup: 'FDIM-Admins',
+      computerSearchOu: 'OU=Workstations,DC=corp,DC=internal,DC=net',
     },
     keycloakConfig: {
       serverUrl: 'https://keycloak.corp.internal.net',

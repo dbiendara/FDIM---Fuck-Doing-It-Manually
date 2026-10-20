@@ -29,6 +29,8 @@ import {
   Check,
   Play,
   ArrowRight,
+  SlidersHorizontal,
+  X,
 } from 'lucide-react';
 
 interface ADComputersViewProps {
@@ -58,6 +60,13 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
   const [isSyncing, setIsSyncing] = useState(false);
   const [isPinging, setIsPinging] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+  const [newlyDiscoveredIds, setNewlyDiscoveredIds] = useState<string[]>([]);
+
+  // Targeted LDAP Discovery modal
+  const [isLdapModalOpen, setIsLdapModalOpen] = useState(false);
+  const [targetOu, setTargetOu] = useState('OU=Workstations,DC=corp,DC=internal,DC=net');
+  const [specificComputerQuery, setSpecificComputerQuery] = useState('');
+  const [targetCustomerForSync, setTargetCustomerForSync] = useState(customers[0]?.id || 'cust-acme');
 
   // Bulk Import modal
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -112,21 +121,34 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
     fetchComputers();
   }, []);
 
-  // Sync AD via LDAP
-  const handleSyncAD = async () => {
+  // Sync AD via LDAP (supports targeted OU and specific computer queries)
+  const handleSyncAD = async (options?: { ouPath?: string; specificNames?: string[]; customerId?: string }) => {
     setIsSyncing(true);
     setSyncFeedback(null);
     try {
-      const res = await fetch('/api/ad-computers/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const res = await fetch('/api/ad-computers/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ouPath: options?.ouPath || targetOu,
+          specificComputerNames: options?.specificNames,
+          customerProfileId: options?.customerId || targetCustomerForSync,
+          discoverNew: true,
+        }),
+      });
       const data = await res.json();
       setSyncFeedback(data.message || 'Active Directory sync complete.');
+      if (Array.isArray(data.discoveredComputers) && data.discoveredComputers.length > 0) {
+        setNewlyDiscoveredIds((prev) => [...prev, ...data.discoveredComputers.map((c: any) => c.id)]);
+      }
       fetchComputers();
-      setTimeout(() => setSyncFeedback(null), 4000);
+      setTimeout(() => setSyncFeedback(null), 8000);
     } catch {
       setSyncFeedback('Failed to sync with Active Directory Domain Controller.');
-      setTimeout(() => setSyncFeedback(null), 4000);
+      setTimeout(() => setSyncFeedback(null), 5000);
     } finally {
       setIsSyncing(false);
+      setIsLdapModalOpen(false);
     }
   };
 
@@ -303,20 +325,30 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={handleSyncAD}
-              disabled={isSyncing}
-              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all disabled:opacity-50"
-              title="Query domain controller for updated computer objects"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Syncing AD...' : 'Sync AD (LDAP)'}</span>
-            </button>
+            <div className="flex items-center rounded-xl bg-slate-800 border border-slate-700 overflow-hidden shadow-sm">
+              <button
+                onClick={() => handleSyncAD()}
+                disabled={isSyncing}
+                className="flex items-center space-x-1.5 px-3 py-2 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+                title="Discover new domain computers and refresh inventory via Active Directory LDAP"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Syncing AD...' : 'Sync AD (LDAP)'}</span>
+              </button>
+              <button
+                onClick={() => setIsLdapModalOpen(true)}
+                disabled={isSyncing}
+                className="px-2.5 py-2 hover:bg-slate-700 text-cyan-400 border-l border-slate-700 text-xs font-bold transition-all cursor-pointer"
+                title="Configure LDAP target OU, search filters, and query specific workstations"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+              </button>
+            </div>
 
             <button
               onClick={() => handlePingComputers()}
               disabled={isPinging}
-              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all disabled:opacity-50"
+              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all disabled:opacity-50 cursor-pointer"
               title="Ping all computers to verify LAN online status"
             >
               <Activity className={`w-3.5 h-3.5 text-emerald-400 ${isPinging ? 'animate-pulse' : ''}`} />
@@ -325,7 +357,7 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
 
             <button
               onClick={() => setIsImportModalOpen(true)}
-              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-md shadow-cyan-600/30 transition-all"
+              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-md shadow-cyan-600/30 transition-all cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Import Hostnames</span>
@@ -335,9 +367,17 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
 
         {/* Sync Feedback Message */}
         {syncFeedback && (
-          <div className="mt-4 p-3 rounded-xl bg-cyan-950/60 border border-cyan-800 text-cyan-300 text-xs flex items-center space-x-2 animate-in fade-in">
-            <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
-            <span>{syncFeedback}</span>
+          <div className="mt-4 p-3 rounded-xl bg-cyan-950/80 border border-cyan-800 text-cyan-200 text-xs flex items-center justify-between space-x-2 animate-in fade-in">
+            <div className="flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span className="font-medium">{syncFeedback}</span>
+            </div>
+            <button
+              onClick={() => setSyncFeedback(null)}
+              className="text-cyan-400 hover:text-white p-1 rounded transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
 
@@ -542,6 +582,11 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                           <span className="font-bold font-mono text-white text-sm">
                             {comp.name}
                           </span>
+                          {newlyDiscoveredIds.includes(comp.id) && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] bg-cyan-950 text-cyan-300 border border-cyan-800 font-mono font-bold animate-pulse">
+                              NEW LDAP
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-slate-400 font-mono mt-0.5 flex items-center space-x-1.5">
                           <span>{comp.ipAddress}</span>
@@ -1095,6 +1140,106 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                 className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium transition-colors cursor-pointer"
               >
                 Close History
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TARGETED ACTIVE DIRECTORY LDAP DISCOVERY MODAL */}
+      {isLdapModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/70">
+              <div className="flex items-center space-x-2.5">
+                <span className="p-2 rounded-xl bg-cyan-950 border border-cyan-800 text-cyan-400">
+                  <SlidersHorizontal className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Targeted Active Directory LDAP Sync</h3>
+                  <p className="text-xs text-slate-400">Discover new domain computers from a specific OU or query hostnames</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsLdapModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Target Search OU (Organizational Unit)
+                </label>
+                <input
+                  type="text"
+                  value={targetOu}
+                  onChange={(e) => setTargetOu(e.target.value)}
+                  placeholder="OU=Workstations,DC=corp,DC=internal,DC=net"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">Queries the Domain Controller for computer objects in this directory branch.</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Specific Computer Hostnames (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={specificComputerQuery}
+                  onChange={(e) => setSpecificComputerQuery(e.target.value)}
+                  placeholder="e.g. WS-OFFICE-99, LAPTOP-EXEC-01 (comma separated)"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">Leave empty to auto-discover newly joined domain workstations.</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Assign to Customer / Company Profile
+                </label>
+                <select
+                  value={targetCustomerForSync}
+                  onChange={(e) => setTargetCustomerForSync(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                >
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.companyName} ({c.customerCode})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setIsLdapModalOpen(false)}
+                className="px-4 py-2 text-slate-400 hover:text-white text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSyncing}
+                onClick={() => {
+                  const specificNames = specificComputerQuery
+                    ? specificComputerQuery.split(',').map((s) => s.trim()).filter(Boolean)
+                    : undefined;
+                  handleSyncAD({
+                    ouPath: targetOu,
+                    specificNames,
+                    customerId: targetCustomerForSync,
+                  });
+                }}
+                className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-md shadow-cyan-600/30 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Querying Active Directory...' : 'Execute LDAP Discovery'}</span>
               </button>
             </div>
           </div>
