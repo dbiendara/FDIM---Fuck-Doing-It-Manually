@@ -66,7 +66,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
   const [customerCode, setCustomerCode] = useState('CONT');
   const [uncShareRoot, setUncShareRoot] = useState('\\\\corp-fs01.internal.net\\deployments');
   const [brandName, setBrandName] = useState('FDIM Suite');
-  const [selectedColorPreset, setSelectedColorPreset] = useState('cyan');
+  const [selectedColorPreset, setSelectedColorPreset] = useState('Cyber Cyan');
   const [primaryColor, setPrimaryColor] = useState('#06b6d4');
   const [secondaryColor, setSecondaryColor] = useState('#2563eb');
   const [showProfanity, setShowProfanity] = useState(true);
@@ -114,12 +114,12 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
     }
   };
 
-  const handleColorPresetChange = (presetKey: string) => {
-    setSelectedColorPreset(presetKey);
-    const preset = COLOR_PRESETS[presetKey as keyof typeof COLOR_PRESETS];
+  const handleColorPresetChange = (presetName: string) => {
+    setSelectedColorPreset(presetName);
+    const preset = COLOR_PRESETS.find((p) => p.name === presetName);
     if (preset) {
-      setPrimaryColor(preset.primaryColor);
-      setSecondaryColor(preset.secondaryColor);
+      setPrimaryColor(preset.primary);
+      setSecondaryColor(preset.secondary);
     }
   };
 
@@ -726,13 +726,13 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
               <div className="space-y-3 pt-2 border-t border-slate-800">
                 <label className="block text-xs font-semibold text-slate-200">Suite Visual Theme & Accent Colors</label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  {Object.entries(COLOR_PRESETS).map(([key, preset]) => (
+                  {COLOR_PRESETS.slice(0, 4).map((preset) => (
                     <button
-                      key={key}
+                      key={preset.name}
                       type="button"
-                      onClick={() => handleColorPresetChange(key)}
+                      onClick={() => handleColorPresetChange(preset.name)}
                       className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                        selectedColorPreset === key
+                        selectedColorPreset === preset.name
                           ? 'border-cyan-500 bg-cyan-950/40 shadow-sm shadow-cyan-500/20'
                           : 'border-slate-800 bg-slate-950 hover:bg-slate-900'
                       }`}
@@ -740,15 +740,15 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
                       <div className="flex items-center space-x-2 mb-1.5">
                         <span
                           className="w-3.5 h-3.5 rounded-full"
-                          style={{ background: preset.primaryColor }}
+                          style={{ background: preset.primary }}
                         ></span>
                         <span
                           className="w-3.5 h-3.5 rounded-full"
-                          style={{ background: preset.secondaryColor }}
+                          style={{ background: preset.secondary }}
                         ></span>
                       </div>
                       <span className="text-xs font-bold text-white block">{preset.name}</span>
-                      <span className="text-[10px] text-slate-400 font-mono">{preset.primaryColor}</span>
+                      <span className="text-[10px] text-slate-400 font-mono">{preset.primary}</span>
                     </button>
                   ))}
                 </div>

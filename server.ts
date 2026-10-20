@@ -1252,17 +1252,12 @@ app.post('/api/setup/initialize', (req, res) => {
       id: custId,
       companyName: defaultCustomer.companyName,
       customerCode: (defaultCustomer.customerCode || defaultCustomer.companyName.slice(0, 4)).toUpperCase(),
-      domain: adConfig?.domain || defaultCustomer.domain || 'CORP',
-      adAdminGroup: adConfig?.adminGroup || 'FDIM-Admins',
+      domainName: adConfig?.domain || defaultCustomer.domain || 'CORP',
+      defaultAdAdminGroup: adConfig?.adminGroup || 'FDIM-Admins',
       uncShareRoot: defaultCustomer.uncShareRoot || `\\\\${adConfig?.domain?.toLowerCase() || 'corp'}-fs01.internal.net\\deployments`,
-      assignedPackageIds: ['pkg-chrome', 'pkg-7zip', 'pkg-vlc', 'pkg-notepadplusplus'],
-      defaultSnippets: ['snip-edge-homepage'],
-      defaultSwitches: ['sw-rdp', 'sw-adgroup', 'sw-power-screen'],
-      status: 'Active',
-      description: 'Primary organization profile configured during initial instance setup.',
-      notes: 'Initial production deployment profile',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      enableRdp: true,
+      packageIds: ['pkg-chrome', 'pkg-7zip', 'pkg-vlc', 'pkg-notepadplusplus'],
+      notes: 'Primary organization profile configured during initial instance setup.',
     });
   }
 

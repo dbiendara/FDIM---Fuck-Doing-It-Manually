@@ -26,6 +26,7 @@ import { AuditCertificateModal } from './components/AuditCertificateModal';
 import { SystemConfigManager } from './components/SystemConfigManager';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginModal } from './components/LoginModal';
+import { SetupWizardModal } from './components/SetupWizardModal';
 import { ADComputersView } from './components/ADComputersView';
 import { ClientAgentQueueView } from './components/ClientAgentQueueView';
 import { loadWizardDraft } from './utils/wizardAutoSave';
@@ -98,6 +99,8 @@ export default function App() {
   // Modals state
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isSetupWizardOpen, setIsSetupWizardOpen] = useState(false);
+  const [setupCompletionNotice, setSetupCompletionNotice] = useState<string | null>(null);
 
   // Machine state (persisted via local storage draft)
   const initialDraft = loadWizardDraft();
@@ -197,6 +200,9 @@ export default function App() {
           setAppSettings(sets);
           if (sets.corporateColors) {
             applyCorporateTheme(sets.corporateColors);
+          }
+          if (sets.initialSetupCompleted === false && !sessionStorage.getItem('fdim_setup_skipped')) {
+            setIsSetupWizardOpen(true);
           }
         }
         if (auth?.user) {
@@ -579,7 +585,22 @@ export default function App() {
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenLogin={() => setIsLoginModalOpen(true)}
         onToggleProfanity={handleToggleProfanity}
+        onOpenSetupWizard={() => setIsSetupWizardOpen(true)}
       />
+
+      {setupCompletionNotice && (
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="p-3.5 rounded-2xl bg-emerald-950/80 border border-emerald-800 text-emerald-200 text-xs flex items-center justify-between shadow-lg">
+            <span className="font-medium">{setupCompletionNotice}</span>
+            <button
+              onClick={() => setSetupCompletionNotice(null)}
+              className="text-emerald-400 hover:text-white px-2 py-0.5 rounded font-bold"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -787,6 +808,10 @@ export default function App() {
         }}
         showProfanity={currentUser.showProfanity !== false}
         onToggleProfanity={handleToggleProfanity}
+        onOpenSetupWizard={() => {
+          setIsSettingsModalOpen(false);
+          setIsSetupWizardOpen(true);
+        }}
       />
 
       {/* Technician Login & AD Auth Modal */}
@@ -796,6 +821,32 @@ export default function App() {
         currentUser={currentUser}
         appSettings={appSettings}
         onUserChanged={(usr) => setCurrentUser(usr)}
+      />
+
+      {/* Initial Setup & Active Directory Onboarding Wizard */}
+      <SetupWizardModal
+        isOpen={isSetupWizardOpen}
+        onClose={() => {
+          sessionStorage.setItem('fdim_setup_skipped', 'true');
+          setIsSetupWizardOpen(false);
+        }}
+        onSetupCompleted={(newAdmin, newSettings, discoveredCount) => {
+          setCurrentUser(newAdmin);
+          setAppSettings(newSettings);
+          setIsSetupWizardOpen(false);
+          setSetupCompletionNotice(
+            `Initial setup completed! Master administrator [${newAdmin.username}] created, Active Directory domain [${newSettings.adLdapConfig.domain}] connected${
+              discoveredCount ? `, and ${discoveredCount} domain computers discovered.` : '.'
+            }`
+          );
+          // Refresh customer profiles
+          fetch('/api/profiles')
+            .then((r) => r.json())
+            .then((custs) => {
+              if (Array.isArray(custs)) setCustomers(custs);
+            })
+            .catch(() => {});
+        }}
       />
     </div>
   );

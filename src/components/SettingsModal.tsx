@@ -37,6 +37,7 @@ interface SettingsModalProps {
   onSettingsUpdated: (newSettings: AppSettings) => void;
   showProfanity?: boolean;
   onToggleProfanity?: () => void;
+  onOpenSetupWizard?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -45,6 +46,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSettingsUpdated,
   showProfanity = true,
   onToggleProfanity,
+  onOpenSetupWizard,
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'branding' | 'sqlite' | 'auth' | 'runner' | 'proxmox' | 'agent' | 'docker'>('general');
   const [settings, setSettings] = useState<AppSettings>({
@@ -234,12 +236,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center space-x-2">
+            {onOpenSetupWizard && (
+              <button
+                type="button"
+                onClick={onOpenSetupWizard}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-cyan-950 border border-cyan-800 text-cyan-300 hover:bg-cyan-900/60 text-xs font-semibold transition-all cursor-pointer"
+                title="Launch Initial Setup & Onboarding Wizard"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Setup Wizard</span>
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Navigation Tabs Bar */}
