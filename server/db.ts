@@ -811,13 +811,25 @@ export function findUserByUsername(username: string): AuthUser | null {
 }
 
 export function saveUser(user: AuthUser): AuthUser {
-  const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(user.id) as { id: string } | undefined;
+  const existing = db
+    .prepare('SELECT id FROM users WHERE id = ? OR LOWER(username) = LOWER(?)')
+    .get(user.id, user.username) as { id: string } | undefined;
   if (existing) {
-    db.prepare('UPDATE users SET username = ?, data = ? WHERE id = ?').run(user.username, JSON.stringify(user), user.id);
+    const updatedUser = { ...user, id: existing.id };
+    db.prepare('UPDATE users SET username = ?, data = ? WHERE id = ?').run(
+      updatedUser.username,
+      JSON.stringify(updatedUser),
+      existing.id
+    );
+    return updatedUser;
   } else {
-    db.prepare('INSERT INTO users (id, username, data) VALUES (?, ?, ?)').run(user.id, user.username, JSON.stringify(user));
+    db.prepare('INSERT INTO users (id, username, data) VALUES (?, ?, ?)').run(
+      user.id,
+      user.username,
+      JSON.stringify(user)
+    );
+    return user;
   }
-  return user;
 }
 
 // Database stats & file info

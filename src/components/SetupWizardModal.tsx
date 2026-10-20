@@ -214,7 +214,14 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        throw new Error(`Server returned unexpected response (${res.status}). Please retry.`);
+      }
+
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Failed to complete setup');
       }

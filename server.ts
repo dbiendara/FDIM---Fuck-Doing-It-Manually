@@ -1192,131 +1192,147 @@ app.get('/api/setup/status', (req, res) => {
 });
 
 app.post('/api/setup/initialize', (req, res) => {
-  const {
-    adminUser,
-    adConfig,
-    companyBrand,
-    defaultCustomer,
-    initialSyncAD,
-  } = req.body;
+  try {
+    const {
+      adminUser,
+      adConfig,
+      companyBrand,
+      defaultCustomer,
+      initialSyncAD,
+    } = req.body || {};
 
-  if (!adminUser || !adminUser.username) {
-    return res.status(400).json({ error: 'Master administrator username is required' });
-  }
+    if (!adminUser || !adminUser.username) {
+      return res.status(400).json({ error: 'Master administrator username is required' });
+    }
 
-  // 1. Create and persist Master Administrator Account
-  const newAdminId = `usr-admin-${Date.now().toString(36)}`;
-  const cleanUsername = String(adminUser.username).trim();
-  const createdAdminUser: AuthUser = {
-    id: newAdminId,
-    username: cleanUsername,
-    displayName: adminUser.displayName || `${cleanUsername} (Master Admin)`,
-    domain: adConfig?.domain || 'CORP',
-    role: 'Administrator',
-    authProvider: 'local',
-    avatarInitials: (adminUser.displayName || cleanUsername).slice(0, 2).toUpperCase(),
-    showProfanity: adminUser.showProfanity !== false,
-  };
-  saveUser(createdAdminUser);
-  activeSessionUser = createdAdminUser;
-
-  // 2. Update Master App Settings
-  const updatedSettings = updateAppSettings({
-    initialSetupCompleted: true,
-    setupCompletedAt: new Date().toISOString(),
-    defaultGlobalDomain: companyBrand?.defaultGlobalDomain || (adConfig?.domain ? `${adConfig.domain.toLowerCase()}.internal.net` : 'corp.internal.net'),
-    authMode: adConfig?.ldapUrl ? 'active_directory' : 'local',
-    adLdapConfig: {
-      ldapUrl: adConfig?.ldapUrl || 'ldaps://dc01.corp.internal.net:636',
+    // 1. Create or update and persist Master Administrator Account
+    const cleanUsername = String(adminUser.username).trim();
+    const existingUser = findUserByUsername(cleanUsername);
+    const adminId = existingUser ? existingUser.id : `usr-admin-${Date.now().toString(36)}`;
+    const createdAdminUser: AuthUser = {
+      id: adminId,
+      username: cleanUsername,
+      displayName: adminUser.displayName || `${cleanUsername} (Master Admin)`,
       domain: adConfig?.domain || 'CORP',
-      baseDn: adConfig?.baseDn || 'DC=corp,DC=internal,DC=net',
-      bindDn: adConfig?.bindDn || 'CN=svc_fdim,OU=ServiceAccounts,DC=corp,DC=internal,DC=net',
-      bindPassword: adConfig?.bindPassword || '',
-      userSearchFilter: '(sAMAccountName={username})',
-      adminGroup: adConfig?.adminGroup || 'FDIM-Admins',
-      computerSearchOu: adConfig?.computerSearchOu || 'OU=Workstations,DC=corp,DC=internal,DC=net',
-    },
-    corporateColors: {
-      primaryColor: companyBrand?.primaryColor || '#06b6d4',
-      secondaryColor: companyBrand?.secondaryColor || '#2563eb',
-      companyBrandName: companyBrand?.companyBrandName || 'FDIM Suite',
-      themeMode: 'dark-cyan',
-      customCssVarEnabled: true,
-    },
-  });
+      role: 'Administrator',
+      authProvider: 'local',
+      avatarInitials: (adminUser.displayName || cleanUsername).slice(0, 2).toUpperCase(),
+      showProfanity: adminUser.showProfanity !== false,
+    };
+    const savedAdmin = saveUser(createdAdminUser);
+    activeSessionUser = savedAdmin;
 
-  // 3. Create or update primary customer profile if provided
-  if (defaultCustomer && defaultCustomer.companyName) {
-    const custId = `cust-${Date.now().toString(36)}`;
-    saveCustomer({
-      id: custId,
-      companyName: defaultCustomer.companyName,
-      customerCode: (defaultCustomer.customerCode || defaultCustomer.companyName.slice(0, 4)).toUpperCase(),
-      domainName: adConfig?.domain || defaultCustomer.domain || 'CORP',
-      defaultAdAdminGroup: adConfig?.adminGroup || 'FDIM-Admins',
-      uncShareRoot: defaultCustomer.uncShareRoot || `\\\\${adConfig?.domain?.toLowerCase() || 'corp'}-fs01.internal.net\\deployments`,
-      enableRdp: true,
-      packageIds: ['pkg-chrome', 'pkg-7zip', 'pkg-vlc', 'pkg-notepadplusplus'],
-      notes: 'Primary organization profile configured during initial instance setup.',
+    // 2. Update Master App Settings
+    const updatedSettings = updateAppSettings({
+      initialSetupCompleted: true,
+      setupCompletedAt: new Date().toISOString(),
+      defaultGlobalDomain: companyBrand?.defaultGlobalDomain || (adConfig?.domain ? `${adConfig.domain.toLowerCase()}.internal.net` : 'corp.internal.net'),
+      authMode: adConfig?.ldapUrl ? 'active_directory' : 'local',
+      adLdapConfig: {
+        ldapUrl: adConfig?.ldapUrl || 'ldaps://dc01.corp.internal.net:636',
+        domain: adConfig?.domain || 'CORP',
+        baseDn: adConfig?.baseDn || 'DC=corp,DC=internal,DC=net',
+        bindDn: adConfig?.bindDn || 'CN=svc_fdim,OU=ServiceAccounts,DC=corp,DC=internal,DC=net',
+        bindPassword: adConfig?.bindPassword || '',
+        userSearchFilter: '(sAMAccountName={username})',
+        adminGroup: adConfig?.adminGroup || 'FDIM-Admins',
+        computerSearchOu: adConfig?.computerSearchOu || 'OU=Workstations,DC=corp,DC=internal,DC=net',
+      },
+      corporateColors: {
+        primaryColor: companyBrand?.primaryColor || '#06b6d4',
+        secondaryColor: companyBrand?.secondaryColor || '#2563eb',
+        companyBrandName: companyBrand?.companyBrandName || 'FDIM Suite',
+        themeMode: 'dark-cyan',
+        customCssVarEnabled: true,
+      },
     });
-  }
 
-  // 4. Initial Active Directory LDAP Sync (if requested)
-  let discoveredCount = 0;
-  if (initialSyncAD) {
-    const existing = getAllADComputers();
-    const domain = adConfig?.domain || 'CORP';
-    const ou = adConfig?.computerSearchOu || 'OU=Workstations,DC=corp,DC=internal,DC=net';
-    const newComps: ADComputer[] = [
-      {
-        id: `comp-ad-${Date.now().toString(36)}-1`,
-        name: `WS-${domain}-001`,
-        dnsHostName: `ws-${domain.toLowerCase()}-001.${domain.toLowerCase()}.internal.net`,
-        operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
-        ouPath: ou,
-        ipAddress: '192.168.10.101',
-        status: 'Online',
-        pingMs: 3,
-        lastSeen: new Date().toISOString(),
-        agentInstalled: false,
-        installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
-        customerProfileId: getAllCustomers()[0]?.id || 'cust-acme',
-        description: 'Primary domain workstation discovered during initial setup wizard LDAP scan',
-        uptimeHours: 12,
-      },
-      {
-        id: `comp-ad-${Date.now().toString(36)}-2`,
-        name: `LAPTOP-${domain}-002`,
-        dnsHostName: `laptop-${domain.toLowerCase()}-002.${domain.toLowerCase()}.internal.net`,
-        operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
-        ouPath: ou,
-        ipAddress: '192.168.10.102',
-        status: 'Online',
-        pingMs: 5,
-        lastSeen: new Date().toISOString(),
-        agentInstalled: false,
-        installedPackageIds: ['pkg-chrome'],
-        customerProfileId: getAllCustomers()[0]?.id || 'cust-acme',
-        description: 'Mobile domain client discovered during initial setup wizard LDAP scan',
-        uptimeHours: 6,
-      },
-    ];
+    // 3. Create or update primary customer profile if provided
+    if (defaultCustomer && defaultCustomer.companyName) {
+      const allCusts = getAllCustomers();
+      const targetCode = (defaultCustomer.customerCode || defaultCustomer.companyName.slice(0, 4)).toUpperCase();
+      const matchedCust = allCusts.find(
+        (c) =>
+          c.customerCode.toUpperCase() === targetCode ||
+          c.companyName.toLowerCase() === String(defaultCustomer.companyName).trim().toLowerCase()
+      );
+      const custId = matchedCust ? matchedCust.id : `cust-${Date.now().toString(36)}`;
+      saveCustomer({
+        id: custId,
+        companyName: defaultCustomer.companyName,
+        customerCode: targetCode,
+        domainName: adConfig?.domain || defaultCustomer.domain || 'CORP',
+        defaultAdAdminGroup: adConfig?.adminGroup || 'FDIM-Admins',
+        uncShareRoot: defaultCustomer.uncShareRoot || `\\\\${adConfig?.domain?.toLowerCase() || 'corp'}-fs01.internal.net\\deployments`,
+        enableRdp: true,
+        packageIds: matchedCust?.packageIds || ['pkg-chrome', 'pkg-7zip', 'pkg-vlc', 'pkg-notepadplusplus'],
+        notes: 'Primary organization profile configured during initial instance setup.',
+      });
+    }
 
-    for (const c of newComps) {
-      if (!existing.some((e) => e.name.toLowerCase() === c.name.toLowerCase())) {
-        saveADComputer(c);
-        discoveredCount++;
+    // 4. Initial Active Directory LDAP Sync (if requested)
+    let discoveredCount = 0;
+    if (initialSyncAD) {
+      const existing = getAllADComputers();
+      const domain = adConfig?.domain || 'CORP';
+      const ou = adConfig?.computerSearchOu || 'OU=Workstations,DC=corp,DC=internal,DC=net';
+      const newComps: ADComputer[] = [
+        {
+          id: `comp-ad-${Date.now().toString(36)}-1`,
+          name: `WS-${domain}-001`,
+          dnsHostName: `ws-${domain.toLowerCase()}-001.${domain.toLowerCase()}.internal.net`,
+          operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
+          ouPath: ou,
+          ipAddress: '192.168.10.101',
+          status: 'Online',
+          pingMs: 3,
+          lastSeen: new Date().toISOString(),
+          agentInstalled: false,
+          installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
+          customerProfileId: getAllCustomers()[0]?.id || 'cust-acme',
+          description: 'Primary domain workstation discovered during initial setup wizard LDAP scan',
+          uptimeHours: 12,
+        },
+        {
+          id: `comp-ad-${Date.now().toString(36)}-2`,
+          name: `LAPTOP-${domain}-002`,
+          dnsHostName: `laptop-${domain.toLowerCase()}-002.${domain.toLowerCase()}.internal.net`,
+          operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
+          ouPath: ou,
+          ipAddress: '192.168.10.102',
+          status: 'Online',
+          pingMs: 5,
+          lastSeen: new Date().toISOString(),
+          agentInstalled: false,
+          installedPackageIds: ['pkg-chrome'],
+          customerProfileId: getAllCustomers()[0]?.id || 'cust-acme',
+          description: 'Mobile domain client discovered during initial setup wizard LDAP scan',
+          uptimeHours: 6,
+        },
+      ];
+
+      for (const c of newComps) {
+        if (!existing.some((e) => e.name.toLowerCase() === c.name.toLowerCase())) {
+          saveADComputer(c);
+          discoveredCount++;
+        }
       }
     }
-  }
 
-  res.json({
-    success: true,
-    message: 'FDIM Suite initial setup completed successfully! Master administrator created and Active Directory connected.',
-    user: activeSessionUser,
-    appSettings: updatedSettings,
-    discoveredComputersCount: discoveredCount,
-  });
+    res.json({
+      success: true,
+      message: 'FDIM Suite initial setup completed successfully! Master administrator created and Active Directory connected.',
+      user: activeSessionUser,
+      appSettings: updatedSettings,
+      discoveredComputersCount: discoveredCount,
+    });
+  } catch (err: any) {
+    console.error('Error in /api/setup/initialize:', err);
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Internal server error during setup initialization',
+    });
+  }
 });
 
 app.post('/api/setup/reset', (req, res) => {
@@ -3338,6 +3354,14 @@ Write-Host "FDIM (${brandingTitle}) Live Provisioning Hook Connected" -Foregroun
 `;
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.send(sampleScript);
+});
+
+// Ensure any unmatched /api/* route returns JSON instead of falling through to Vite HTML
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: `API endpoint not found: ${req.method} ${req.originalUrl}`,
+  });
 });
 
 // Vite / Static setup
