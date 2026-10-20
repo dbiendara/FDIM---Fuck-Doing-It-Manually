@@ -42,6 +42,7 @@ interface CustomerProfilesManagerProps {
   customers: CustomerProfile[];
   packages: SoftwarePackage[];
   defaultDomain?: string;
+  availableSnippets?: UserLogonStagingSnippet[];
   onAddCustomer: (profile: CustomerProfile) => void;
   onUpdateCustomer: (profile: CustomerProfile) => void;
   onDeleteCustomer: (customerId: string) => void;
@@ -52,6 +53,7 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
   customers,
   packages,
   defaultDomain,
+  availableSnippets = [],
   onAddCustomer,
   onUpdateCustomer,
   onDeleteCustomer,
@@ -1001,6 +1003,28 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
                     >
                       Privacy HKCU
                     </button>
+                    {availableSnippets.length > 0 && (
+                      <select
+                        onChange={(e) => {
+                          const snip = availableSnippets.find((s) => s.id === e.target.value);
+                          if (snip) {
+                            if (!customScriptSnippets.some((s) => s.id === snip.id)) {
+                              setCustomScriptSnippets((prev) => [...prev, { ...snip, enabled: true }]);
+                            }
+                          }
+                          e.target.value = '';
+                        }}
+                        defaultValue=""
+                        className="bg-slate-900 border border-cyan-800/80 rounded px-2 py-0.5 text-[10px] text-cyan-300 font-mono cursor-pointer"
+                      >
+                        <option value="" disabled>+ Import from Snippet Library...</option>
+                        {availableSnippets.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} ({s.category})
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                 </div>
 

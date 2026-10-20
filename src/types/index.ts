@@ -52,8 +52,14 @@ export interface PrinterMapping {
 export interface UserLogonStagingSnippet {
   id: string;
   name: string;
+  description?: string;
+  category?: 'Outlook & Mail' | 'Browser & Web' | 'Shortcuts & Desktop' | 'OneDrive & Cloud' | 'Security & Policies' | 'Custom' | string;
   script: string;
   enabled: boolean;
+  author?: string;
+  tags?: string[];
+  isGlobalTemplate?: boolean;
+  updatedAt?: string;
 }
 
 export interface UserLogonStagingConfig {

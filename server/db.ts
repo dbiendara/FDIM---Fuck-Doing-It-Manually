@@ -11,6 +11,7 @@ import {
   ADComputer,
   QueuedTask,
   PackageSandboxTest,
+  UserLogonStagingSnippet,
 } from '../src/types';
 
 const dataDir = path.resolve(process.cwd(), 'data');
@@ -85,6 +86,12 @@ db.exec(`
     package_id TEXT NOT NULL,
     data TEXT NOT NULL,
     started_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS first_run_snippets (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
   );
 `);
 
@@ -220,6 +227,9 @@ export function seedInitialDataIfEmpty(
     insertUser.run(defaultAdmin.id, defaultAdmin.username, JSON.stringify(defaultAdmin));
     insertUser.run(defaultTech.id, defaultTech.username, JSON.stringify(defaultTech));
   }
+
+  // Seed default First-Run User Logon Snippets
+  seedInitialFirstRunSnippetsIfEmpty();
 }
 
 // -------------------------------------------------------------
@@ -959,4 +969,214 @@ export function getComputerHistory(machineName: string) {
     tasks,
   };
 }
+
+// -------------------------------------------------------------
+// FIRST-RUN USER LOGON SNIPPETS STORE
+// -------------------------------------------------------------
+
+export function getAllFirstRunSnippets(): UserLogonStagingSnippet[] {
+  const rows = db.prepare('SELECT data FROM first_run_snippets ORDER BY updated_at DESC').all() as Array<{ data: string }>;
+  return rows.map((r) => JSON.parse(r.data));
+}
+
+export function getFirstRunSnippetById(id: string): UserLogonStagingSnippet | null {
+  const row = db.prepare('SELECT data FROM first_run_snippets WHERE id = ?').get(id) as { data: string } | undefined;
+  return row ? JSON.parse(row.data) : null;
+}
+
+export function saveFirstRunSnippet(snippet: UserLogonStagingSnippet): UserLogonStagingSnippet {
+  const now = new Date().toISOString();
+  const toSave = { ...snippet, updatedAt: now };
+  const existing = db.prepare('SELECT id FROM first_run_snippets WHERE id = ?').get(snippet.id);
+  if (existing) {
+    db.prepare('UPDATE first_run_snippets SET data = ?, updated_at = ? WHERE id = ?').run(
+      JSON.stringify(toSave),
+      now,
+      snippet.id
+    );
+  } else {
+    db.prepare('INSERT INTO first_run_snippets (id, data, updated_at) VALUES (?, ?, ?)').run(
+      snippet.id,
+      JSON.stringify(toSave),
+      now
+    );
+  }
+  return toSave;
+}
+
+export function deleteFirstRunSnippet(id: string): boolean {
+  const info = db.prepare('DELETE FROM first_run_snippets WHERE id = ?').run(id);
+  return info.changes > 0;
+}
+
+export function seedInitialFirstRunSnippetsIfEmpty(): UserLogonStagingSnippet[] {
+  const count = (db.prepare('SELECT COUNT(*) as cnt FROM first_run_snippets').get() as { cnt: number }).cnt;
+  if (count > 0) {
+    return getAllFirstRunSnippets();
+  }
+
+  const defaultTemplates: UserLogonStagingSnippet[] = [
+    {
+      id: 'snip-outlook-sig',
+      name: 'Map Corporate Outlook Signature Template',
+      description: 'Pre-populates the local Outlook signature directory and sets default signature registry keys in HKCU.',
+      category: 'Outlook & Mail',
+      enabled: true,
+      author: 'FDIM System',
+      isGlobalTemplate: true,
+      tags: ['Outlook', 'Email', 'Signatures', 'Office'],
+      script: `# Ensure Outlook Signatures directory exists in user AppData
+$sigDir = "$env:APPDATA\\Microsoft\\Signatures"
+if (-not (Test-Path $sigDir)) { New-Item -ItemType Directory -Path $sigDir -Force | Out-Null }
+
+# Check for corporate UNC signature template or generate localized signature
+$uncSig = "\\\\corp-fs01.internal.net\\deployments\\templates\\CorporateSignature.htm"
+if (Test-Path $uncSig) {
+    Copy-Item -Path $uncSig -Destination "$sigDir\\Corporate.htm" -Force
+    Write-UserLog "Copied corporate Outlook signature from $uncSig" "SUCCESS"
+} else {
+    $sigContent = "<html><body><font face='Segoe UI' size='2'><b>$env:USERNAME</b><br>Corporate Workstation User<br><font color='#0284c7'>FDIM Managed Endpoint</font></font></body></html>"
+    Set-Content -Path "$sigDir\\Corporate.htm" -Value $sigContent -Encoding UTF8
+    Write-UserLog "Generated default local Outlook signature file" "SUCCESS"
+}
+
+# Configure Outlook Mail Profile default signature registry keys
+$outlookReg = "HKCU:\\Software\\Microsoft\\Office\\16.0\\Common\\MailSettings"
+if (-not (Test-Path $outlookReg)) { New-Item -Path $outlookReg -Force | Out-Null }
+Set-ItemProperty -Path $outlookReg -Name "NewSignature" -Value "Corporate" -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path $outlookReg -Name "ReplySignature" -Value "Corporate" -Force -ErrorAction SilentlyContinue`,
+    },
+    {
+      id: 'snip-intranet-shortcut',
+      name: 'Pin Corporate Intranet to Desktop & Start Menu',
+      description: 'Creates prominent desktop and Start Menu shortcuts linking employees to company internal portal & ERP.',
+      category: 'Shortcuts & Desktop',
+      enabled: true,
+      author: 'FDIM System',
+      isGlobalTemplate: true,
+      tags: ['Desktop', 'Shortcuts', 'Intranet', 'Web'],
+      script: `# Create Corporate Desktop & Start Menu Web Shortcuts
+$wsh = New-Object -ComObject WScript.Shell
+$desktop = [Environment]::GetFolderPath("Desktop")
+$shortcut = $wsh.CreateShortcut("$desktop\\Corporate Intranet Portal.url")
+$shortcut.TargetPath = "https://intranet.corp.internal.net"
+$shortcut.Save()
+
+# Pin to user Quick Launch / Start Menu if directory exists
+$programs = [Environment]::GetFolderPath("Programs")
+if (Test-Path $programs) {
+    $startShortcut = $wsh.CreateShortcut("$programs\\Corporate Intranet Portal.url")
+    $startShortcut.TargetPath = "https://intranet.corp.internal.net"
+    $startShortcut.Save()
+}
+Write-UserLog "Created Intranet desktop & Start Menu shortcuts" "SUCCESS"`,
+    },
+    {
+      id: 'snip-onedrive-kfm',
+      name: 'OneDrive Silent Account Config & Known Folder Move',
+      description: 'Silently activates OneDrive business sync and redirects user Desktop, Documents, and Pictures folders to OneDrive.',
+      category: 'OneDrive & Cloud',
+      enabled: true,
+      author: 'FDIM System',
+      isGlobalTemplate: true,
+      tags: ['OneDrive', 'Backup', 'KFM', 'Cloud'],
+      script: `# Enable OneDrive Silent Business Configuration & Known Folder Move
+$odReg = "HKCU:\\Software\\Microsoft\\OneDrive"
+if (-not (Test-Path $odReg)) { New-Item -Path $odReg -Force | Out-Null }
+Set-ItemProperty -Path $odReg -Name "EnableAddAccounts" -Value 1 -Force
+Set-ItemProperty -Path $odReg -Name "SilentAccountConfig" -Value 1 -Force
+Set-ItemProperty -Path $odReg -Name "KFMSilentOptIn" -Value "1" -Force
+Write-UserLog "Configured OneDrive Silent Account Provisioning & KFM" "SUCCESS"`,
+    },
+    {
+      id: 'snip-edge-policies',
+      name: 'Configure Enterprise Edge Policies & Tab Sync',
+      description: 'Sets corporate homepage, disables first-run promotional splash banners, and enables work profile synchronization.',
+      category: 'Browser & Web',
+      enabled: true,
+      author: 'FDIM System',
+      isGlobalTemplate: true,
+      tags: ['Edge', 'Browser', 'Policies', 'Intranet'],
+      script: `# Enforce corporate Edge browser defaults and suppress promotional splash screens
+$edgeKey = "HKCU:\\Software\\Policies\\Microsoft\\Edge"
+if (-not (Test-Path $edgeKey)) { New-Item -Path $edgeKey -Force | Out-Null }
+Set-ItemProperty -Path $edgeKey -Name "HomepageLocation" -Value "https://portal.office.com" -Force
+Set-ItemProperty -Path $edgeKey -Name "RestoreOnStartup" -Value 4 -Force
+Set-ItemProperty -Path $edgeKey -Name "HideFirstRunExperience" -Value 1 -Force
+Set-ItemProperty -Path $edgeKey -Name "ShowHomeButton" -Value 1 -Force
+Write-UserLog "Applied Microsoft Edge enterprise browser policies" "SUCCESS"`,
+    },
+    {
+      id: 'snip-corp-wallpaper',
+      name: 'Apply Company Branded Desktop Wallpaper',
+      description: 'Sets official company desktop background with lockscreen compliance from network share or local staging.',
+      category: 'Shortcuts & Desktop',
+      enabled: false,
+      author: 'FDIM System',
+      isGlobalTemplate: true,
+      tags: ['Wallpaper', 'Branding', 'Appearance'],
+      script: `# Set corporate background wallpaper
+$uncWallpaper = "\\\\corp-fs01.internal.net\\deployments\\assets\\corporate-wallpaper.jpg"
+$localWallpaper = "$env:LOCALAPPDATA\\FDIM\\corporate-wallpaper.jpg"
+
+if (Test-Path $uncWallpaper) {
+    Copy-Item -Path $uncWallpaper -Destination $localWallpaper -Force
+    Set-ItemProperty -Path "HKCU:\\Control Panel\\Desktop" -Name "Wallpaper" -Value $localWallpaper -Force
+    rundll32.exe user32.dll,UpdatePerUserSystemParameters 1, True
+    Write-UserLog "Applied company wallpaper from $uncWallpaper" "SUCCESS"
+} else {
+    Write-UserLog "Wallpaper UNC share not reachable; retaining Windows standard theme" "INFO"
+}`,
+    },
+    {
+      id: 'snip-powershell-profile',
+      name: 'Initialize Technician / User PowerShell Profile',
+      description: 'Creates user PowerShell $PROFILE with UTF-8 encoding, timestamp prompt, and helpful administrative aliases.',
+      category: 'Custom',
+      enabled: false,
+      author: 'FDIM System',
+      isGlobalTemplate: true,
+      tags: ['PowerShell', 'DevOps', 'Profile'],
+      script: `# Create user PowerShell Profile
+$profilePath = "$env:USERPROFILE\\Documents\\WindowsPowerShell\\Microsoft.PowerShell_profile.ps1"
+$profileDir = Split-Path $profilePath
+if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
+
+$profileContent = @'
+# FDIM Workstation Shell Profile
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+function prompt { "[$env:COMPUTERNAME\\$env:USERNAME] $(Get-Date -Format 'HH:mm:ss') \`nPS> " }
+Set-Alias -Name ll -Value Get-ChildItem -ErrorAction SilentlyContinue
+'@
+
+Set-Content -Path $profilePath -Value $profileContent -Encoding UTF8 -Force
+Write-UserLog "Initialized user PowerShell profile at $profilePath" "SUCCESS"`,
+    },
+    {
+      id: 'snip-screen-saver-lock',
+      name: 'Enforce Interactive Screen Lock on 15m Inactivity',
+      description: 'Sets user screen saver timeout to 900 seconds (15 min) and requires password authentication on resume.',
+      category: 'Security & Policies',
+      enabled: true,
+      author: 'FDIM System',
+      isGlobalTemplate: true,
+      tags: ['Security', 'ScreenLock', 'Compliance'],
+      script: `# Enforce workstation screen lock security policy
+$deskReg = "HKCU:\\Control Panel\\Desktop"
+Set-ItemProperty -Path $deskReg -Name "ScreenSaveActive" -Value "1" -Force
+Set-ItemProperty -Path $deskReg -Name "ScreenSaverIsSecure" -Value "1" -Force
+Set-ItemProperty -Path $deskReg -Name "ScreenSaveTimeOut" -Value "900" -Force
+Write-UserLog "Enforced 15-minute screen lock security policy" "SUCCESS"`,
+    },
+  ];
+
+  const insertSnippet = db.prepare('INSERT OR REPLACE INTO first_run_snippets (id, data, updated_at) VALUES (?, ?, ?)');
+  const now = new Date().toISOString();
+  for (const snip of defaultTemplates) {
+    insertSnippet.run(snip.id, JSON.stringify(snip), now);
+  }
+
+  return defaultTemplates;
+}
+
 

@@ -8,10 +8,11 @@ import {
   NetworkDriveMapping,
   PrinterMapping,
   UserLogonStagingConfig,
+  UserLogonStagingSnippet,
   AppSettings,
   AuthUser,
 } from './types';
-import { Header } from './components/Header';
+import { Header, AppNavTab } from './components/Header';
 import { NewPCWizard } from './components/NewPCWizard';
 import { QuickSoftwareDeploy } from './components/QuickSoftwareDeploy';
 import { LiveRunner } from './components/LiveRunner';
@@ -19,6 +20,7 @@ import { AIDetective } from './components/AIDetective';
 import { CustomerProfilesManager } from './components/CustomerProfilesManager';
 import { PackageLibrary } from './components/PackageLibrary';
 import { DeploymentHistory } from './components/DeploymentHistory';
+import { FirstRunSnippetsManager } from './components/FirstRunSnippetsManager';
 import { ScriptModal } from './components/ScriptModal';
 import { AuditCertificateModal } from './components/AuditCertificateModal';
 import { SystemConfigManager } from './components/SystemConfigManager';
@@ -31,11 +33,12 @@ import { loadUserProfanityPreference, saveUserProfanityPreference } from './util
 import { applyCorporateTheme, loadSavedCorporateColors } from './utils/theme';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'wizard' | 'quick-deploy' | 'ad-computers' | 'agent' | 'runner' | 'library' | 'ai-detective' | 'history' | 'customers'>('wizard');
+  const [activeTab, setActiveTab] = useState<AppNavTab>('wizard');
   const [packages, setPackages] = useState<SoftwarePackage[]>([]);
   const [customers, setCustomers] = useState<CustomerProfile[]>([]);
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
   const [systemSwitches, setSystemSwitches] = useState<SystemConfigSwitch[]>([]);
+  const [snippets, setSnippets] = useState<UserLogonStagingSnippet[]>([]);
 
   // App Settings & Auth User state
   const [appSettings, setAppSettings] = useState<AppSettings>({
@@ -179,14 +182,16 @@ export default function App() {
       fetch('/api/profiles').then((r) => r.json()),
       fetch('/api/system-switches').then((r) => r.json()),
       fetch('/api/deployments').then((r) => r.json()),
+      fetch('/api/snippets').then((r) => r.json()).catch(() => []),
       fetch('/api/settings').then((r) => r.json()).catch(() => null),
       fetch('/api/auth/me').then((r) => r.json()).catch(() => null),
     ])
-      .then(([pkgs, custs, switches, deps, sets, auth]) => {
+      .then(([pkgs, custs, switches, deps, snips, sets, auth]) => {
         setPackages(pkgs || []);
         setCustomers(custs || []);
         setSystemSwitches(switches || []);
         setDeployments(deps || []);
+        setSnippets(snips || []);
         if (sets) {
           setAppSettings(sets);
           if (sets.corporateColors) {
@@ -507,6 +512,51 @@ export default function App() {
     setActiveTab('runner');
   };
 
+  // Handlers for First-Run Snippets Library
+  const handleAddSnippet = (newSnippet: UserLogonStagingSnippet) => {
+    fetch('/api/snippets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newSnippet),
+    })
+      .then((r) => r.json())
+      .then((saved) => {
+        setSnippets((prev) => [saved, ...prev.filter((s) => s.id !== saved.id)]);
+      })
+      .catch(() => {
+        setSnippets((prev) => [newSnippet, ...prev]);
+      });
+  };
+
+  const handleUpdateSnippet = (updatedSnippet: UserLogonStagingSnippet) => {
+    fetch(`/api/snippets/${updatedSnippet.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updatedSnippet),
+    })
+      .then((r) => r.json())
+      .then((saved) => {
+        setSnippets((prev) => prev.map((s) => (s.id === saved.id ? saved : s)));
+      })
+      .catch(() => {
+        setSnippets((prev) => prev.map((s) => (s.id === updatedSnippet.id ? updatedSnippet : s)));
+      });
+  };
+
+  const handleDeleteSnippet = (id: string) => {
+    fetch(`/api/snippets/${id}`, { method: 'DELETE' }).catch((err) => console.error(err));
+    setSnippets((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const handleResetDefaultSnippets = () => {
+    fetch('/api/snippets/reset-defaults', { method: 'POST' })
+      .then((r) => r.json())
+      .then((defaults) => {
+        if (Array.isArray(defaults)) setSnippets(defaults);
+      })
+      .catch((err) => console.error(err));
+  };
+
   const handleViewCertificate = (record: DeploymentRecord) => {
     setActiveAuditRecord(record);
     setIsAuditModalOpen(true);
@@ -564,6 +614,8 @@ export default function App() {
             onOpenManualPackageModal={() => setActiveTab('library')}
             onStartDeployment={handleStartDeployment}
             onOpenScriptModal={() => setIsScriptModalOpen(true)}
+            availableSnippets={snippets}
+            onOpenSnippetsManager={() => setActiveTab('snippets')}
             showProfanity={currentUser.showProfanity !== false}
           />
         )}
@@ -628,10 +680,32 @@ export default function App() {
             customers={customers}
             packages={packages}
             defaultDomain={appSettings.defaultGlobalDomain}
+            availableSnippets={snippets}
             onAddCustomer={handleAddCustomer}
             onUpdateCustomer={handleUpdateCustomer}
             onDeleteCustomer={handleDeleteCustomer}
             onSelectCustomerForSetup={handleSelectCustomerForSetup}
+          />
+        )}
+
+        {activeTab === 'snippets' && (
+          <FirstRunSnippetsManager
+            snippets={snippets}
+            onAddSnippet={handleAddSnippet}
+            onUpdateSnippet={handleUpdateSnippet}
+            onDeleteSnippet={handleDeleteSnippet}
+            onResetDefaults={handleResetDefaultSnippets}
+            onSelectForWizard={(snippet) => {
+              setUserLogonStaging((prev) => {
+                const current = prev.customScriptSnippets || [];
+                if (current.some((s) => s.id === snippet.id)) return prev;
+                return {
+                  ...prev,
+                  customScriptSnippets: [...current, { ...snippet, enabled: true }],
+                };
+              });
+              setActiveTab('wizard');
+            }}
           />
         )}
 

@@ -37,6 +37,11 @@ import {
   getAllPackageTests,
   savePackageTest,
   getComputerHistory,
+  getAllFirstRunSnippets,
+  getFirstRunSnippetById,
+  saveFirstRunSnippet,
+  deleteFirstRunSnippet,
+  seedInitialFirstRunSnippetsIfEmpty,
 } from './server/db.ts';
 import { AuthUser, ADComputer, QueuedTask, PackageSandboxTest } from './src/types';
 
@@ -115,8 +120,14 @@ export interface PrinterMapping {
 export interface UserLogonStagingSnippet {
   id: string;
   name: string;
+  description?: string;
+  category?: string;
   script: string;
   enabled: boolean;
+  author?: string;
+  tags?: string[];
+  isGlobalTemplate?: boolean;
+  updatedAt?: string;
 }
 
 export interface UserLogonStagingConfig {
@@ -1055,6 +1066,51 @@ app.put('/api/system-switches/:id', (req, res) => {
   };
   saveSystemSwitch(updatedSwitch);
   res.json(updatedSwitch);
+});
+
+// First-Run User Logon Snippets Library API (SQLite backed)
+app.get('/api/snippets', (req, res) => {
+  const snippets = getAllFirstRunSnippets();
+  res.json(snippets);
+});
+
+app.post('/api/snippets', (req, res) => {
+  const newSnippet: UserLogonStagingSnippet = {
+    id: req.body.id || `snip-${Date.now().toString(36)}`,
+    name: req.body.name || 'Untitled Snippet',
+    description: req.body.description || '',
+    category: req.body.category || 'Custom',
+    script: req.body.script || '',
+    enabled: req.body.enabled !== false,
+    author: req.body.author || activeSessionUser.displayName,
+    tags: Array.isArray(req.body.tags) ? req.body.tags : [],
+    isGlobalTemplate: req.body.isGlobalTemplate || false,
+    ...req.body,
+  };
+  const saved = saveFirstRunSnippet(newSnippet);
+  res.status(201).json(saved);
+});
+
+app.put('/api/snippets/:id', (req, res) => {
+  const updatedSnippet: UserLogonStagingSnippet = {
+    id: req.params.id,
+    ...req.body,
+  };
+  const saved = saveFirstRunSnippet(updatedSnippet);
+  res.json(saved);
+});
+
+app.delete('/api/snippets/:id', (req, res) => {
+  const deleted = deleteFirstRunSnippet(req.params.id);
+  if (!deleted) {
+    return res.status(404).json({ error: 'Snippet not found' });
+  }
+  res.json({ success: true, deletedId: req.params.id });
+});
+
+app.post('/api/snippets/reset-defaults', (req, res) => {
+  const templates = seedInitialFirstRunSnippetsIfEmpty();
+  res.json(templates);
 });
 
 // Deployments History API (SQLite backed)

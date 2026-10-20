@@ -53,6 +53,11 @@ import {
   Zap,
   Battery,
   Code,
+  Code2,
+  Globe,
+  Mail,
+  Layers,
+  X,
 } from 'lucide-react';
 import {
   loadWizardDraft,
@@ -92,6 +97,8 @@ interface NewPCWizardProps {
   onOpenManualPackageModal: () => void;
   onStartDeployment: () => void;
   onOpenScriptModal: () => void;
+  availableSnippets?: UserLogonStagingSnippet[];
+  onOpenSnippetsManager?: () => void;
   showProfanity?: boolean;
 }
 
@@ -126,12 +133,22 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
   onOpenManualPackageModal,
   onStartDeployment,
   onOpenScriptModal,
+  availableSnippets = [],
+  onOpenSnippetsManager,
   showProfanity = true,
 }) => {
   const [packageSearch, setPackageSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [sourceFilter, setSourceFilter] = useState<'All' | 'unc' | 'winget'>('All');
   const [editingPackageId, setEditingPackageId] = useState<string | null>(null);
+
+  // First-Run Snippet management state in Wizard
+  const [isSnippetPickerOpen, setIsSnippetPickerOpen] = useState(false);
+  const [isAddCustomSnippetOpen, setIsAddCustomSnippetOpen] = useState(false);
+  const [customSnippetTitle, setCustomSnippetTitle] = useState('');
+  const [customSnippetScript, setCustomSnippetScript] = useState('');
+  const [snippetSearchQuery, setSnippetSearchQuery] = useState('');
+  const [expandedSnippetId, setExpandedSnippetId] = useState<string | null>(null);
 
   // Selected customer profile
   const currentCustomer = useMemo(() => {
@@ -405,6 +422,54 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
     setWPrinterName('');
     setWPrinterPath('');
     setWPrinterDefault(false);
+  };
+
+  // First-Run Snippet Handlers
+  const toggleSnippet = (snippetId: string) => {
+    setUserLogonStaging((prev) => {
+      const current = prev.customScriptSnippets || [];
+      const updated = current.map((s) => (s.id === snippetId ? { ...s, enabled: s.enabled === false ? true : false } : s));
+      return { ...prev, customScriptSnippets: updated };
+    });
+  };
+
+  const removeSnippet = (snippetId: string) => {
+    setUserLogonStaging((prev) => {
+      const current = prev.customScriptSnippets || [];
+      return { ...prev, customScriptSnippets: current.filter((s) => s.id !== snippetId) };
+    });
+  };
+
+  const addSnippetFromLibrary = (snippet: UserLogonStagingSnippet) => {
+    setUserLogonStaging((prev) => {
+      const current = prev.customScriptSnippets || [];
+      if (current.some((s) => s.id === snippet.id)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        customScriptSnippets: [...current, { ...snippet, enabled: true }],
+      };
+    });
+  };
+
+  const addCustomSnippet = () => {
+    if (!customSnippetTitle.trim() || !customSnippetScript.trim()) return;
+    const newSnip: UserLogonStagingSnippet = {
+      id: `snip-${Date.now().toString(36)}`,
+      name: customSnippetTitle.trim(),
+      script: customSnippetScript.trim(),
+      enabled: true,
+      category: 'Custom',
+      author: 'Workstation Staging',
+    };
+    setUserLogonStaging((prev) => ({
+      ...prev,
+      customScriptSnippets: [...(prev.customScriptSnippets || []), newSnip],
+    }));
+    setCustomSnippetTitle('');
+    setCustomSnippetScript('');
+    setIsAddCustomSnippetOpen(false);
   };
 
   // Toggle package
@@ -1693,7 +1758,375 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Sub-section: First-Run User Logon Snippets & Custom Tasks */}
+        <div className="mt-6 pt-6 border-t border-slate-800 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-7 h-7 rounded-lg bg-cyan-950/80 border border-cyan-800/60 text-cyan-400 flex items-center justify-center">
+                <Code2 className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+                  <span>First-Run User Logon Scripts & Tasks</span>
+                  <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800">
+                    {(userLogonStaging.customScriptSnippets || []).filter((s) => s.enabled !== false).length} Active
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Executed inside interactive user context upon first sign-in (e.g. Outlook signatures, OneDrive KFM, desktop shortcuts)
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              {onOpenSnippetsManager && (
+                <button
+                  type="button"
+                  onClick={onOpenSnippetsManager}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-850 text-slate-400 hover:text-white border border-slate-800 text-xs font-medium transition-colors"
+                  title="Open Snippet Library Manager"
+                >
+                  Manage Library
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsSnippetPickerOpen(true)}
+                className="px-3 py-1.5 rounded-lg bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-800 text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>+ Pick from Library</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAddCustomSnippetOpen(true)}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Custom Script</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Snippets List for this PC */}
+          <div className="space-y-2.5">
+            {(userLogonStaging.customScriptSnippets || []).map((snip) => {
+              const isEnabled = snip.enabled !== false;
+              const isExpanded = expandedSnippetId === snip.id;
+
+              return (
+                <div
+                  key={snip.id}
+                  className={`rounded-xl border transition-all text-xs overflow-hidden ${
+                    isEnabled
+                      ? 'bg-slate-950/80 border-cyan-900/60 shadow-sm'
+                      : 'bg-slate-950/40 border-slate-850 opacity-60'
+                  }`}
+                >
+                  <div className="p-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={isEnabled}
+                        onChange={() => toggleSnippet(snip.id)}
+                        className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 w-4 h-4 cursor-pointer shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-white font-medium truncate">{snip.name}</span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-900 border border-slate-800 text-slate-400">
+                            {snip.category || 'Custom'}
+                          </span>
+                        </div>
+                        {snip.description && (
+                          <p className="text-[11px] text-slate-400 truncate mt-0.5">{snip.description}</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedSnippetId(isExpanded ? null : snip.id)}
+                        className="p-1 rounded text-slate-400 hover:text-cyan-300 transition-colors cursor-pointer"
+                        title={isExpanded ? 'Hide code preview' : 'View PowerShell code'}
+                      >
+                        {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeSnippet(snip.id)}
+                        className="p-1 rounded text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
+                        title="Remove from this PC setup"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="p-3 bg-slate-950 border-t border-slate-850 font-mono text-[11px] text-cyan-300 whitespace-pre-wrap max-h-48 overflow-y-auto">
+                      {snip.script}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {(!userLogonStaging.customScriptSnippets || userLogonStaging.customScriptSnippets.length === 0) && (
+              <div className="text-xs text-slate-500 italic p-4 text-center border border-dashed border-slate-800 rounded-xl flex items-center justify-center space-x-2">
+                <span>No first-run scripts selected for this PC.</span>
+                <button
+                  type="button"
+                  onClick={() => setIsSnippetPickerOpen(true)}
+                  className="text-cyan-400 hover:text-cyan-300 font-semibold underline not-italic cursor-pointer"
+                >
+                  Pick from Snippet Library
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Quick First-Run Configurations (Edge, Welcome, Clean-Up) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 text-xs">
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+              <label className="flex items-center space-x-2 cursor-pointer font-semibold text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={userLogonStaging.configureEdgeHomepage ?? true}
+                  onChange={(e) =>
+                    setUserLogonStaging((prev) => ({ ...prev, configureEdgeHomepage: e.target.checked }))
+                  }
+                  className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 w-3.5 h-3.5"
+                />
+                <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Configure Edge Homepage</span>
+              </label>
+              <input
+                type="text"
+                value={userLogonStaging.edgeHomepageUrl || ''}
+                onChange={(e) =>
+                  setUserLogonStaging((prev) => ({ ...prev, edgeHomepageUrl: e.target.value }))
+                }
+                placeholder="https://portal.office.com"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-cyan-300 font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+              <label className="flex items-center space-x-2 cursor-pointer font-semibold text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={userLogonStaging.showWelcomeNotification ?? true}
+                  onChange={(e) =>
+                    setUserLogonStaging((prev) => ({ ...prev, showWelcomeNotification: e.target.checked }))
+                  }
+                  className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 w-3.5 h-3.5"
+                />
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Show Welcome Toast</span>
+              </label>
+              <input
+                type="text"
+                value={userLogonStaging.welcomeMessage || ''}
+                onChange={(e) =>
+                  setUserLogonStaging((prev) => ({ ...prev, welcomeMessage: e.target.value }))
+                }
+                placeholder="Welcome to your new corporate workstation!"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+              <label className="flex items-center space-x-2 cursor-pointer font-semibold text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={userLogonStaging.cleanUpAfterFirstRun ?? false}
+                  onChange={(e) =>
+                    setUserLogonStaging((prev) => ({ ...prev, cleanUpAfterFirstRun: e.target.checked }))
+                  }
+                  className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 w-3.5 h-3.5"
+                />
+                <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+                <span>Delete Script After 1st Run</span>
+              </label>
+              <span className="text-[10px] text-slate-500 font-mono">Active Setup</span>
+            </div>
+          </div>
+        </div>
       </div>
+
+      {/* SNIPPET LIBRARY PICKER MODAL */}
+      {isSnippetPickerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full flex flex-col max-h-[85vh] shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-xl bg-cyan-950 border border-cyan-800 text-cyan-400 flex items-center justify-center font-bold">
+                  <Layers className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Select First-Run Snippets from Library</h3>
+                  <p className="text-xs text-slate-400">
+                    Add pre-configured user logon scripts to this specific workstation setup
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsSnippetPickerOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 border-b border-slate-800 bg-slate-950/40">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={snippetSearchQuery}
+                  onChange={(e) => setSnippetSearchQuery(e.target.value)}
+                  placeholder="Search snippet library..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+              {availableSnippets
+                .filter(
+                  (s) =>
+                    !snippetSearchQuery ||
+                    s.name.toLowerCase().includes(snippetSearchQuery.toLowerCase()) ||
+                    (s.description && s.description.toLowerCase().includes(snippetSearchQuery.toLowerCase()))
+                )
+                .map((snip) => {
+                  const isAttached = (userLogonStaging.customScriptSnippets || []).some((s) => s.id === snip.id);
+
+                  return (
+                    <div
+                      key={snip.id}
+                      className={`p-3.5 rounded-xl border transition-all flex items-center justify-between gap-3 text-xs ${
+                        isAttached
+                          ? 'bg-cyan-950/30 border-cyan-800/80'
+                          : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-white font-bold">{snip.name}</span>
+                          <span className="text-[10px] font-mono px-2 py-0.2 rounded bg-slate-900 border border-slate-800 text-slate-400">
+                            {snip.category}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 line-clamp-1 mt-0.5">{snip.description}</p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isAttached) {
+                            removeSnippet(snip.id);
+                          } else {
+                            addSnippetFromLibrary(snip);
+                          }
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0 cursor-pointer ${
+                          isAttached
+                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                            : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-sm'
+                        }`}
+                      >
+                        {isAttached ? '✓ Added' : '+ Add to PC'}
+                      </button>
+                    </div>
+                  );
+                })}
+
+              {availableSnippets.length === 0 && (
+                <div className="text-center py-8 text-xs text-slate-400 italic">
+                  No snippets available in the library yet.
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-slate-800 flex justify-end bg-slate-950/60">
+              <button
+                type="button"
+                onClick={() => setIsSnippetPickerOpen(false)}
+                className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold transition-all cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QUICK ADD CUSTOM SNIPPET MODAL */}
+      {isAddCustomSnippetOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full flex flex-col max-h-[85vh] shadow-2xl overflow-hidden">
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+              <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+                <Code className="w-4 h-4 text-cyan-400" />
+                <span>Add Custom First-Run Script to this PC</span>
+              </h3>
+              <button
+                onClick={() => setIsAddCustomSnippetOpen(false)}
+                className="p-1 rounded text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Script Title *</label>
+                <input
+                  type="text"
+                  value={customSnippetTitle}
+                  onChange={(e) => setCustomSnippetTitle(e.target.value)}
+                  placeholder="e.g. Map Specialized Engineering Share"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">PowerShell Commands *</label>
+                <textarea
+                  rows={8}
+                  value={customSnippetScript}
+                  onChange={(e) => setCustomSnippetScript(e.target.value)}
+                  placeholder={`# Runs silently in user's Kerberos session at first logon\nWrite-UserLog "Running custom task..." "INFO"\n`}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-cyan-300 font-mono text-xs focus:outline-none focus:border-cyan-500 resize-y"
+                  spellCheck={false}
+                />
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-800 flex justify-end space-x-2 bg-slate-950/60">
+              <button
+                type="button"
+                onClick={() => setIsAddCustomSnippetOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={addCustomSnippet}
+                disabled={!customSnippetTitle || !customSnippetScript}
+                className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
+              >
+                Add Script
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Execution Launcher Bar */}
       <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
