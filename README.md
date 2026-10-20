@@ -8,11 +8,24 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 
 ---
 
-![FDIM Workstation Provisioning Suite](src/assets/images/fdim_real_wizard.png)
+![FDIM Workstation Provisioning Suite](src/assets/images/fdim_streamlined_wizard.jpg)
 
 ---
 
 ## 🚀 Key Features
+
+### 🧭 Streamlined Navigation & Centralized Operations Menu
+
+![FDIM Streamlined Operations Menu](src/assets/images/fdim_streamlined_menu.jpg)
+
+- **Zero-Clutter Header Architecture**: Completely overhauled navigation eliminating header overload with a clean, focused primary bar:
+  - **PC Setup**: Interactive workstation provisioning wizard with auto-save draft state.
+  - **AD Computers**: Live Active Directory computer inventory with ICMP ping reachability and bulk rollouts.
+  - **Live Runner**: Real-time PowerShell execution terminal with live logging.
+- **Unified Two-Section Dropdown Menu (`Menu ▾`)**:
+  - **Operations & Monitoring**: Fast access to *Quick Software Deploy*, *Autonomous Client Agent & Offline Wait Queue* (with live task count badge), and *Deployment History & Transcripts*.
+  - **Configuration & Libraries**: Dedicated views for *Customer & Multi-Tenant Profiles*, *First-Run Snippets Library* (marked with a **NEW** indicator), *Software Catalog* (UNC shares & Winget), and *AI Installer Detective* (powered by Google Gemini).
+- **Keyboard & Touch Optimized**: Instant dropdown toggle with outside-click dismissal, active route highlight indicators, and badge counts.
 
 ### 💾 Workstation Wizard Auto-Save & Draft Persistence
 - **Continuous Local Storage Persistence**: The New PC Provisioning Wizard automatically saves your in-progress machine configuration to browser `localStorage` with a smooth 300ms debounce.
@@ -26,7 +39,7 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 
 ### 🖥️ Active Directory Computers Directory & Multi-PC Bulk Rollouts
 
-![Active Directory Computers Directory](src/assets/images/fdim_real_ad_computers.png)
+![Active Directory Computers Directory](src/assets/images/fdim_streamlined_ad_computers.jpg)
 
 - **Live AD Domain Computer Inventory**: Complete directory of all domain-joined client workstations, Laptops, and departmental PCs with real-time status tracking.
 - **LDAP Tree Sync & Auto-Discovery**: One-click LDAP synchronization with corporate Domain Controllers (`(&(objectCategory=computer)(objectClass=user))`) to discover new endpoints and track OU memberships.
@@ -128,7 +141,7 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 - **Default Winget Catalog Items**: Preloaded support for essential workstation software that doesn't need to live on the local UNC share:
   - **7-Zip** (`7zip.7zip`)
   - **VLC Media Player** (`VideoLAN.VLC`)
-  - **Microsoft Outlook Classic** (`Microsoft.Outlook`)
+  - **Microsoft Outlook Classic (`pkg-outlook-classic`)**: Configured with the **Office Deployment Tool (ODT / Click-to-Run)** unattended installer (`/configure configuration-outlook.xml`) or custom UNC/HTTP share. Solves the limitation where Winget only distributes the new web-based Outlook and does not offer classic desktop Outlook.
   - **Google Chrome** (`Google.Chrome`)
   - **Notepad++** (`Notepad++.Notepad++`)
   - **Adobe Acrobat Reader DC** (`Adobe.Acrobat.Reader.64-bit`)
@@ -150,11 +163,30 @@ With FDIM, technicians can select or customize client profiles, enforce critical
   - Maintain an execution transcript log in `C:\ProgramData\FDIM\Logs\`.
   - Report exact return exit codes with graceful rollback warnings.
 
-### 🖧 User First-Logon Staging (Network Drives & Printers via Active Setup)
-- **Solves Non-Logged-In User Limitation**: Workstation provisioning runs as Administrator or SYSTEM before the employee ever logs in. Network drive mappings (`HKCU:\Network`) and per-user network printers require the user's interactive Kerberos security token.
-- **Enterprise Dual-Engine Solution**:
+### 🖧 User First-Logon Staging & Central Snippets Library
+
+![First-Run User Logon Snippets Library](src/assets/images/fdim_first_run_snippets.jpg)
+
+- **Solves Non-Logged-In User Limitation**: Workstation provisioning runs as Administrator or SYSTEM before the employee ever logs in. Network drive mappings (`HKCU:\Network`), per-user network printers, and user profile customizations require the user's interactive Kerberos security token.
+- **Dedicated Central First-Run Snippets Library (`FirstRunSnippetsManager`)**:
+  - Central manager tab to organize, write, and maintain reusable PowerShell user-logon script blocks.
+  - Granular categories: `Outlook & Mail`, `Browser & Web`, `Shortcuts & Desktop`, `OneDrive & Cloud`, `Security & Policies`, `Custom`.
+  - Rich metadata support: snippet name, description, author, categorized tags, global template flag, and syntax-highlighted PowerShell code viewer.
+  - Pre-seeded enterprise templates:
+    - **Corporate Outlook Signature Template Mapping**: Copies signature HTML/RTF files to `$env:APPDATA\Microsoft\Signatures` and sets default Outlook signatures.
+    - **Pin Corporate Intranet to Desktop & Start**: Creates custom desktop and start menu `.url` shortcuts for intranet portals and IT helpdesks.
+    - **OneDrive Silent Account Config & KFM**: Silently signs into OneDrive with Azure AD credentials and enables Known Folder Move (Desktop, Documents, Pictures backup).
+    - **Microsoft Edge Corporate Start Page & Search**: Configures default homepage, intranet tabs, and search provider in the user registry.
+    - **Corporate Branded Desktop Wallpaper**: Deploys company wallpaper from UNC share to local cache and updates shell parameters via `SystemParametersInfo`.
+    - **Disable Windows Diagnostic Data & Consumer Telemetry**: Removes user-level diagnostic telemetry prompts and consumer Bing suggestions.
+    - **Post-Provisioning Cleanup**: Removes temporary setup scripts, clears staging logs, and self-cleans post-execution.
+- **Direct PC-Setup Wizard Integration (Step 4)**:
+  - Technicians can pick, enable/disable, preview code, expand/collapse, and add custom ad-hoc user-logon snippets directly on the machine being staged in the New PC Setup tab—not just inside corporate customer profiles!
+- **Customer Profile Defaults**:
+  - Link default snippet IDs into company customer profiles. Selecting a customer in Step 1 automatically activates their standard corporate first-run scripts.
+- **Enterprise Dual-Engine Execution**:
   1. **Per-Machine Network Printers**: Configured machine-wide during provisioning using `rundll32 printui.dll,PrintUIEntry /ga /n"\\printserver\printer"`, making them immediately available to every present and future user on the PC.
-  2. **Active Setup First-Logon Staging**: FDIM generates a self-contained payload at `C:\ProgramData\FDIM\UserLogonSetup.ps1` and registers it in `HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\FDIM_UserProvisioning` (with a secondary Scheduled Task trigger at logon). When any user signs in for the first time, the Windows Shell silently executes the script in their user context, mapping persistent drives (`net use S: "\\server\share" /persistent:yes` with dynamic `%USERNAME%` resolution) and assigning printers!
+  2. **Active Setup First-Logon Staging**: FDIM generates a self-contained payload at `C:\ProgramData\FDIM\UserLogonSetup.ps1` and registers it in `HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\FDIM_UserProvisioning` (with a secondary Scheduled Task trigger at logon). When any user signs in for the first time, the Windows Shell silently executes the script in their user context, mapping persistent drives (`net use S: "\\server\share" /persistent:yes` with dynamic `%USERNAME%` resolution), assigning printers, and executing all enabled first-run snippets!
 
 ### ⏱️ Interactive Live Runner & Audit Certificates
 
@@ -168,15 +200,20 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 
 ## 📸 Screenshots & Visual Tour
 
-| **Workstation Deployment Wizard** | **Live Runner PowerShell Terminal** |
+| **Workstation Deployment Wizard** | **Streamlined Operations & Config Menu** |
 |:---:|:---:|
-| ![Workstation Wizard](src/assets/images/fdim_real_wizard.png) | ![Live Runner](src/assets/images/fdim_real_runner.png) |
-| *Step-by-step provisioning: Customer profile, Local Admin, OOBE cleanup, and Software catalog* | *Real-time PowerShell execution stream with pipeline steps & live logging* |
+| ![Workstation Wizard](src/assets/images/fdim_streamlined_wizard.jpg) | ![Streamlined Operations Menu](src/assets/images/fdim_streamlined_menu.jpg) |
+| *Streamlined provisioning: Customer profile, System configuration, and Step 4 First-Run Snippets* | *Clutter-free navigation: Operations & Monitoring + Configuration & Libraries dropdown* |
 
-| **Active Directory Computers Directory** | **Autonomous Client Agent & Wait-Tasks Queue** |
+| **First-Run User Logon Snippets Library** | **Active Directory Computers Directory** |
 |:---:|:---:|
-| ![AD Computers](src/assets/images/fdim_real_ad_computers.png) | ![Client Agent Queue](src/assets/images/fdim_real_agent_tasks.png) |
-| *LDAP domain inventory with ping reachability & multi-PC bulk rollouts* | *Offline machine wait-tasks dispatcher, recurring heartbeat graph & scheduled tasks* |
+| ![First-Run Snippets](src/assets/images/fdim_first_run_snippets.jpg) | ![AD Computers](src/assets/images/fdim_streamlined_ad_computers.jpg) |
+| *Central library of reusable PowerShell user logon scripts with categorizations & tags* | *LDAP domain inventory with real-time ping reachability & multi-PC bulk rollouts* |
+
+| **Live Runner PowerShell Terminal** | **Autonomous Client Agent & Wait-Tasks Queue** |
+|:---:|:---:|
+| ![Live Runner](src/assets/images/fdim_real_runner.png) | ![Client Agent Queue](src/assets/images/fdim_real_agent_tasks.png) |
+| *Real-time PowerShell execution stream with pipeline steps & live logging* | *Offline machine wait-tasks dispatcher, recurring heartbeat graph & scheduled tasks* |
 
 ---
 
@@ -187,16 +224,19 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 │                               Client Browser                                │
 │        React 19 • Vite • Tailwind CSS • Lucide Icons • Motion               │
 │                                                                             │
-│  ┌───────────────────────┐ ┌───────────────────────┐ ┌───────────────────┐  │
-│  │ New PC Wizard         │ │ Quick Software Deploy │ │ AI Detective      │  │
-│  │ (Auto-Save to Storage)│ │ (Fast Batch App Run)  │ │ (Gemini Analysis) │  │
-│  ├───────────────────────┤ ├───────────────────────┤ ├───────────────────┤  │
-│  │ Customer Profiles     │ │ Package Library       │ │ System Switches   │  │
-│  │ (Multi-Tenant & Blueprints) (UNC & Winget Catalog) │ (PowerShell Rules)│  │
-│  ├───────────────────────┤ ├───────────────────────┤ ├───────────────────┤  │
-│  │ Live Runner           │ │ Deployment History    │ │ Auth & Settings   │  │
-│  │ (Real-Time Terminal)  │ │ (Audit Certificates)  │ │ (AD/LDAP/Keycloak)│  │
-│  └───────────────────────┘ └───────────────────────┘ └───────────────────┘  │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ Primary Navigation Bar: [PC Setup] [AD Computers] [Live Runner] [Menu]│  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                      │
+│         ┌────────────────────────────┴────────────────────────────┐         │
+│         ▼                                                         ▼         │
+│  ┌───────────────────────────────┐      ┌────────────────────────────────┐  │
+│  │ Operations & Monitoring       │      │ Configuration & Libraries      │  │
+│  │ • Quick Software Deploy       │      │ • Customer Profiles & Tenants  │  │
+│  │ • Client Agent & Wait Queue   │      │ • First-Run Snippets [NEW]     │  │
+│  │ • Deployment History & Logs   │      │ • Software Catalog (UNC/Winget)│  │
+│  │ • Live Execution Terminal     │      │ • AI Detective (Gemini API)    │  │
+│  └───────────────────────────────┘      └────────────────────────────────┘  │
 │                                      │                                      │
 │                  Browser LocalStorage Draft Cache (300ms)                   │
 └──────────────────────────────────────┬──────────────────────────────────────┘
@@ -205,8 +245,9 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 │                              Node.js / Express                              │
 │                              (server.ts / tsx)                              │
 │                                                                             │
-│  • Customer Profiles Store          • Dynamic System Switches Engine        │
-│  • Software Catalog API             • PowerShell Script Synthesizer         │
+│  • Customer Profiles Store          • First-Run Logon Snippets Library      │
+│  • Dynamic System Switches Engine   • Software Catalog & ODT Packages       │
+│  • Autonomous Client Agent Engine   • PowerShell Script Synthesizer         │
 │  • Deployment History & Audit Logs  • Google Gemini AI Installer Analysis   │
 │  • AD/LDAP & Keycloak Auth Proxy    • Native SQLite Engine (node:sqlite)    │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -230,18 +271,25 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 │   └── nginx/
 │       ├── nginx.conf                    # Nginx reverse proxy, HTTPS 443, WebSocket terminal streaming, security headers
 │       └── ssl/                          # Mounted SSL certificates directory
-├── server.ts                             # Express backend, SQLite tables & PowerShell script synthesizer
+├── server/
+│   └── db.ts                             # Native SQLite database schema, seed data & queries
+├── server.ts                             # Express backend, REST APIs, client agent dispatch & PowerShell script synthesizer
 ├── src/
 │   ├── main.tsx                          # React client entry point
 │   ├── App.tsx                           # Main application layout, auth state & tab routing
 │   ├── index.css                         # Global styling with Tailwind CSS imports
 │   ├── types/
-│   │   └── index.ts                      # TypeScript interfaces (Profiles, Packages, Switches, Auth)
+│   │   └── index.ts                      # TypeScript interfaces (Profiles, Packages, Switches, Snippets, Auth)
 │   ├── utils/
-│   │   └── wizardAutoSave.ts             # LocalStorage persistence & draft recovery engine
+│   │   ├── wizardAutoSave.ts             # LocalStorage persistence & draft recovery engine
+│   │   ├── branding.ts                   # Corporate branding color palette & acronym management
+│   │   └── theme.ts                      # Dark/light theme utilities
 │   └── components/
-│       ├── Header.tsx                    # Main navigation bar, active profile indicator & auth menu
-│       ├── NewPCWizard.tsx               # Workstation provisioning wizard with auto-save & reset
+│       ├── Header.tsx                    # Streamlined navigation bar, primary tabs, Operations & Config dropdown menu
+│       ├── NewPCWizard.tsx               # Workstation provisioning wizard with draft auto-save, Step 4 snippets & drives
+│       ├── FirstRunSnippetsManager.tsx   # Central manager for PowerShell first-run user logon scripts, categories & editor
+│       ├── ADComputersView.tsx           # Live Active Directory computers directory, ping reachability & bulk rollouts
+│       ├── ClientAgentQueueView.tsx      # Autonomous client agent status, recurring heartbeats & offline wait queue
 │       ├── QuickSoftwareDeploy.tsx       # Rapid standalone software deployment for existing PCs
 │       ├── CustomerProfilesManager.tsx   # Customer multi-tenant profiles & safe profile deletion
 │       ├── PackageLibrary.tsx            # UNC & Winget software catalog with manual package creator
@@ -251,6 +299,7 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 │       ├── DeploymentHistory.tsx         # Past deployment audit logs & export
 │       ├── ScriptModal.tsx               # PowerShell script preview, copy & download
 │       ├── AuditCertificateModal.tsx     # Post-deployment compliance certificate viewer
+│       ├── PackageSandboxModal.tsx       # Proxmox VE isolated VM package testing & automated snapshot rollback
 │       ├── SettingsModal.tsx             # Global domain & AD/LDAP/Keycloak authentication settings
 │       └── LoginModal.tsx                # User authentication dialog (Local / AD / Keycloak)
 ├── metadata.json                         # Applet metadata & permission declarations
@@ -403,49 +452,58 @@ For local contributors developing features or testing frontend changes without D
 
 ## 📖 Workstation Provisioning Workflow (Zero-Touch Client Deployment)
 
-### 1. Configure & Manage Customer Profiles
-Navigate to the **Customer Profiles** tab:
+### 1. Manage First-Run User Logon Snippets (Central Library)
+Navigate to **Menu ▾ > Configuration & Libraries > First-Run Snippets**:
+1. Review built-in enterprise snippet templates (Outlook signatures, Intranet shortcuts, OneDrive KFM, Edge start page, corporate desktop wallpaper, telemetry reduction, and cleanup).
+2. Filter snippets by category tabs (**Outlook & Mail**, **Browser & Web**, **Shortcuts & Desktop**, **OneDrive & Cloud**, **Security & Policies**, or **Custom**).
+3. Click **+ New Snippet** to author custom reusable PowerShell logon scripts with syntax-highlighted code editing, descriptions, and tags.
+4. Toggle global templates or edit existing scripts on the fly.
+
+### 2. Configure & Manage Customer Profiles
+Navigate to **Menu ▾ > Configuration & Libraries > Company Profiles**:
 1. Click **+ Add Customer Profile**.
 2. Enter the customer company name, unique customer code, Active Directory domain name (FQDN or NetBIOS), delegated AD admin group name, and primary UNC repository path.
 3. Select which software packages should be assigned as **Default Software** for all new workstations deployed under this profile.
-4. Configure optional mapped network drives, network printers, and user first-logon staging.
+4. Configure default mapped network drives, network printers, and **default First-Run User Logon Snippets**.
 5. Save the profile.
 6. **Profile Deletion**: To delete an obsolete profile, click the **Trash icon** (🗑️) on the profile card or click **Delete Profile** inside the edit modal, then confirm in the validation prompt.
 
-### 2. Manage System Configuration Switches
-Navigate to **System Switches**:
+### 3. Manage System Configuration Switches
+Navigate to **System Switches** (or configure via Settings):
 1. Review or toggle default switches:
    - **Enable Remote Desktop**: Enables RDP, sets NLA, and adds firewall exceptions.
    - **Add AD Group to Administrators**: Adds `DOMAIN\Group` to the local Administrators group.
    - **Power Plan**: Standardizes monitor off (AC) and standby timeout (AC) via `powercfg`.
 2. Click **+ Add Custom Switch** to register additional company policies (e.g., disable Fast Startup, map network drives, or configure corporate proxy).
 
-### 3. Register UNC Software Packages & Winget Items
-Navigate to the **UNC Catalog**:
+### 4. Register UNC Software Packages & Winget Items
+Navigate to **Menu ▾ > Configuration & Libraries > Software Catalog**:
 1. Use **+ Add Package Manually** to register internal software installers without needing AI.
-2. Select your installer architecture (MSI, Inno Setup, NSIS, WiX, Winget, or TeamViewer Host).
-3. Specify the UNC network path (`\\fileserver\deploy\App.exe`) or Winget Package ID (`VideoLAN.VLC`).
+2. Select your installer architecture (MSI, Inno Setup, NSIS, WiX, Winget, TeamViewer Host, or Office Deployment Tool ODT).
+3. Specify the UNC network path (`\\fileserver\deploy\App.exe`), Winget Package ID (`VideoLAN.VLC`), or ODT config (`pkg-outlook-classic`).
 4. Enter silent flags, extra parameters, configuration files (e.g. `.tvopt`), and detection rules (registry path or file path).
 
-### 4. Deploy a New Workstation (New PC Wizard)
-Navigate to **New PC Setup**:
+### 5. Deploy a New Workstation (New PC Setup Wizard)
+Navigate to **PC Setup** (in the primary navigation bar):
 - **Step 1 - Profile & Hostname**: Select the Customer Profile. The workstation hostname defaults to `$env:COMPUTERNAME` (or you can override it for target generation).
 - **Step 2 - System Configuration**: Review active switches and adjust parameters (such as the specific AD Admin group or timeout minutes).
 - **Step 3 - Software Selection**: Default customer software is automatically selected. Check or uncheck packages as needed.
-- **Step 4 - Network Drives & Printers**: Review staged network resources for machine-wide setup and first-user logon mapping.
+- **Step 4 - Network Drives, Printers & First-Run Snippets**:
+  - Review staged network drives and printers for machine-wide and first-logon setup.
+  - **First-Run Snippets Section**: Select and toggle reusable first-run user logon scripts from the library (or add ad-hoc scripts) directly for this specific workstation!
 - **Auto-Save Protection**: Every selection, switch toggle, and parameter edit is automatically persisted to local storage in real-time. If you switch tabs or reload the browser, your configuration is restored with a notification badge, or you can click **Reset to Profile Defaults** to revert.
 - **Launch Execution**:
   - Click **Generate PowerShell Script** to inspect, copy, or download the self-logging script.
   - Click **Run Zero-Touch Deployment** to test execution in the live step-by-step console.
 
-### 5. Quick Software Deployment (Existing Machines)
-Navigate to **Quick Deploy**:
+### 6. Quick Software Deployment (Existing Machines)
+Navigate to **Menu ▾ > Operations & Monitoring > Quick Deploy**:
 1. For existing workstations that do not require full OS provisioning, enter target hostname(s) and domain.
 2. Select the desired software packages from the UNC share or Winget catalog.
 3. Instantly run the silent installation or generate standalone execution scripts.
 
-### 6. Analyze Unknown Installers (AI Detective)
-Navigate to **AI Detective**:
+### 7. Analyze Unknown Installers (AI Detective)
+Navigate to **Menu ▾ > Configuration & Libraries > AI Detective**:
 1. Input installer details (installer filename, vendor, version, or command behavior).
 2. Let Google Gemini inspect the installer structure to recommend tested silent switches, highlight potential hanging dialog risks, and provide complete unattended execution commands.
 
