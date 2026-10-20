@@ -421,7 +421,7 @@ For local contributors developing features or testing frontend changes without D
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/dbiendara/FDIM---Fuck-Doing-It-Manually.git
-   cd fdim
+   cd FDIM---Fuck-Doing-It-Manually
    ```
 
 2. **Install dependencies**:
