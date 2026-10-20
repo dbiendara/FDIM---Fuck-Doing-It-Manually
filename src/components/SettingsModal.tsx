@@ -217,7 +217,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full flex flex-col max-h-[90vh] shadow-2xl overflow-hidden">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-5xl xl:max-w-6xl w-full flex flex-col max-h-[92vh] shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
           <div className="flex items-center space-x-3">
@@ -236,109 +236,119 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="flex border-b border-slate-800 bg-slate-950/30 px-5 text-xs font-semibold">
-          <button
-            onClick={() => setActiveTab('general')}
-            className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors ${
-              activeTab === 'general'
-                ? 'border-cyan-500 text-cyan-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Globe className="w-4 h-4" />
-            <span>Global Domain Defaults</span>
-          </button>
+        {/* Navigation Tabs Bar with Horizontal Scroll Support */}
+        <div className="border-b border-slate-800 bg-slate-950/40 relative">
+          <div className="flex items-center overflow-x-auto scrollbar-thin scrollbar-thumb-slate-700/80 scrollbar-track-slate-900/40 px-3 sm:px-5 text-xs font-semibold gap-1 scroll-smooth">
+            <button
+              type="button"
+              onClick={() => setActiveTab('general')}
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'general'
+                  ? 'border-cyan-500 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Globe className="w-4 h-4 shrink-0" />
+              <span>Global Domain</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('branding')}
-            className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
-              activeTab === 'branding'
-                ? 'border-cyan-500 text-cyan-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Palette className="w-4 h-4 text-pink-400" />
-            <span>Corporate Colors</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('branding')}
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'branding'
+                  ? 'border-cyan-500 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Palette className="w-4 h-4 text-pink-400 shrink-0" />
+              <span>Corporate Colors</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('sqlite')}
-            className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors ${
-              activeTab === 'sqlite'
-                ? 'border-cyan-500 text-cyan-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Database className="w-4 h-4" />
-            <span>SQLite Database</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('sqlite')}
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'sqlite'
+                  ? 'border-cyan-500 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Database className="w-4 h-4 shrink-0" />
+              <span>SQLite Database</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('auth')}
-            className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
-              activeTab === 'auth'
-                ? 'border-cyan-500 text-cyan-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Shield className="w-4 h-4" />
-            <span>AD / Keycloak</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('auth')}
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'auth'
+                  ? 'border-cyan-500 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Shield className="w-4 h-4 shrink-0" />
+              <span>AD / Keycloak</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('runner')}
-            className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
-              activeTab === 'runner'
-                ? 'border-cyan-500 text-cyan-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <UserCheck className="w-4 h-4 text-emerald-400" />
-            <span>Delegated Runner (Helpdesk)</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('runner')}
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'runner'
+                  ? 'border-cyan-500 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Delegated Runner</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('proxmox')}
-            className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
-              activeTab === 'proxmox'
-                ? 'border-cyan-500 text-cyan-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Box className="w-4 h-4 text-purple-400" />
-            <span>Proxmox Sandbox</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('proxmox')}
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'proxmox'
+                  ? 'border-cyan-500 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Box className="w-4 h-4 text-purple-400 shrink-0" />
+              <span>Proxmox Sandbox</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('agent')}
-            className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
-              activeTab === 'agent'
-                ? 'border-cyan-500 text-cyan-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Radio className="w-4 h-4 text-blue-400" />
-            <span>Client Agent</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('agent')}
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'agent'
+                  ? 'border-cyan-500 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Radio className="w-4 h-4 text-blue-400 shrink-0" />
+              <span>Client Agent</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('docker')}
-            className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
-              activeTab === 'docker'
-                ? 'border-cyan-500 text-cyan-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Server className="w-4 h-4" />
-            <span>Docker & SSL</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('docker')}
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'docker'
+                  ? 'border-cyan-500 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Server className="w-4 h-4 shrink-0" />
+              <span>Docker & SSL</span>
+            </button>
+          </div>
         </div>
 
         {/* Tab Content */}
