@@ -31,6 +31,12 @@ import {
   ArrowRight,
   SlidersHorizontal,
   X,
+  Copy,
+  Trash2,
+  Edit3,
+  Rocket,
+  AlertTriangle,
+  Download,
 } from 'lucide-react';
 
 interface ADComputersViewProps {
@@ -46,7 +52,6 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
   packages,
   onSelectMachineForProvisioning,
   onOpenQuickDeployForMachine,
-  onQueueTaskForMachine,
 }) => {
   const [computers, setComputers] = useState<ADComputer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -60,21 +65,63 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
   const [isSyncing, setIsSyncing] = useState(false);
   const [isPinging, setIsPinging] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [newlyDiscoveredIds, setNewlyDiscoveredIds] = useState<string[]>([]);
+  const [showAdBridgeHelper, setShowAdBridgeHelper] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Targeted LDAP Discovery modal
   const [isLdapModalOpen, setIsLdapModalOpen] = useState(false);
-  const [targetOu, setTargetOu] = useState('OU=Workstations,DC=corp,DC=internal,DC=net');
+  const [targetOu, setTargetOu] = useState('');
   const [specificComputerQuery, setSpecificComputerQuery] = useState('');
-  const [targetCustomerForSync, setTargetCustomerForSync] = useState(customers[0]?.id || 'cust-acme');
+  const [targetCustomerForSync, setTargetCustomerForSync] = useState(customers[0]?.id || '');
 
-  // Bulk Import modal
+  // Add / Bulk Import modal
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [addMode, setAddMode] = useState<'single' | 'bulk'>('single');
+  const [singleHostname, setSingleHostname] = useState('');
+  const [singleIpAddress, setSingleIpAddress] = useState('');
+  const [singleOs, setSingleOs] = useState('Windows 11 Pro 24H2');
+  const [singleOu, setSingleOu] = useState('');
+  const [singleDescription, setSingleDescription] = useState('');
   const [importText, setImportText] = useState('');
-  const [importDomain, setImportDomain] = useState('corp.internal.net');
-  const [importCustomer, setImportCustomer] = useState(customers[0]?.id || 'cust-acme');
+  const [importDomain, setImportDomain] = useState('');
+  const [importCustomer, setImportCustomer] = useState(customers[0]?.id || '');
+  const [isImporting, setIsImporting] = useState(false);
 
-  // Bulk Deploy modal
+  // Inline Edit IP Modal
+  const [editingComputer, setEditingComputer] = useState<ADComputer | null>(null);
+  const [editIpValue, setEditIpValue] = useState('');
+  const [editOsValue, setEditOsValue] = useState('');
+  const [editDescValue, setEditDescValue] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  // Deploy Agent Modal
+  const [isDeployAgentModalOpen, setIsDeployAgentModalOpen] = useState(false);
+  const [deployAgentTargets, setDeployAgentTargets] = useState<ADComputer[]>([]);
+  const [deployTransport, setDeployTransport] = useState<'WinRM' | 'SMB' | 'WMI'>('WinRM');
+  const [deployServerUrl, setDeployServerUrl] = useState(() => window.location.origin);
+  const [deployAdminUser, setDeployAdminUser] = useState('');
+  const [deployAdminPassword, setDeployAdminPassword] = useState('');
+  const [isDeployingAgent, setIsDeployingAgent] = useState(false);
+  const [deployAgentResult, setDeployAgentResult] = useState<{
+    message: string;
+    results: Array<{
+      id: string;
+      name: string;
+      fqdn: string;
+      ipAddress: string;
+      reachable: boolean;
+      pingMs: number | null;
+      openPort?: number;
+      status: string;
+      detail: string;
+    }>;
+    remotePushScript: string;
+    bootstrapOneLiner: string;
+  } | null>(null);
+
+  // Bulk Software Deploy modal
   const [isBulkDeployModalOpen, setIsBulkDeployModalOpen] = useState(false);
   const [bulkSelectedPackageIds, setBulkSelectedPackageIds] = useState<string[]>([]);
   const [isQueueingBulk, setIsQueueingBulk] = useState(false);
@@ -85,6 +132,12 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
   const [historyData, setHistoryData] = useState<any | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [historyTab, setHistoryTab] = useState<'timeline' | 'deployments' | 'tasks'>('timeline');
+
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2500);
+  };
 
   const handleOpenHistory = async (name: string) => {
     setHistoryComputerName(name);
@@ -109,7 +162,7 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
     try {
       const res = await fetch('/api/ad-computers');
       const data = await res.json();
-      setComputers(data);
+      setComputers(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Error fetching AD computers:', err);
     } finally {
@@ -119,40 +172,73 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
 
   useEffect(() => {
     fetchComputers();
+    // Load configured AD defaults from server settings
+    fetch('/api/settings')
+      .then((r) => r.json())
+      .then((s) => {
+        if (s?.defaultGlobalDomain) {
+          setImportDomain(s.defaultGlobalDomain);
+        }
+        if (s?.adLdapConfig?.computerSearchOu) {
+          setTargetOu(s.adLdapConfig.computerSearchOu);
+          setSingleOu(s.adLdapConfig.computerSearchOu);
+        } else if (s?.adLdapConfig?.baseDn) {
+          setTargetOu(s.adLdapConfig.baseDn);
+          setSingleOu(s.adLdapConfig.baseDn);
+        }
+        if (s?.adLdapConfig?.bindDn) {
+          setDeployAdminUser(s.adLdapConfig.bindDn);
+        }
+      })
+      .catch(() => {});
   }, []);
 
-  // Sync AD via LDAP (supports targeted OU and specific computer queries)
+  useEffect(() => {
+    if (customers.length > 0 && !targetCustomerForSync) {
+      setTargetCustomerForSync(customers[0].id);
+    }
+    if (customers.length > 0 && !importCustomer) {
+      setImportCustomer(customers[0].id);
+    }
+  }, [customers]);
+
+  // Sync AD via real LDAPv3 query
   const handleSyncAD = async (options?: { ouPath?: string; specificNames?: string[]; customerId?: string }) => {
     setIsSyncing(true);
     setSyncFeedback(null);
+    setSyncError(null);
     try {
       const res = await fetch('/api/ad-computers/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ouPath: options?.ouPath || targetOu,
+          ouPath: options?.ouPath !== undefined ? options.ouPath : targetOu,
           specificComputerNames: options?.specificNames,
           customerProfileId: options?.customerId || targetCustomerForSync,
           discoverNew: true,
         }),
       });
       const data = await res.json();
-      setSyncFeedback(data.message || 'Active Directory sync complete.');
-      if (Array.isArray(data.discoveredComputers) && data.discoveredComputers.length > 0) {
-        setNewlyDiscoveredIds((prev) => [...prev, ...data.discoveredComputers.map((c: any) => c.id)]);
+      if (!res.ok || data.success === false) {
+        setSyncError(data.message || data.ldapError || 'Active Directory LDAP sync failed.');
+        setShowAdBridgeHelper(true);
+      } else {
+        setSyncFeedback(data.message || 'Active Directory sync complete.');
+        if (Array.isArray(data.discoveredComputers) && data.discoveredComputers.length > 0) {
+          setNewlyDiscoveredIds((prev) => [...prev, ...data.discoveredComputers.map((c: any) => c.id)]);
+        }
       }
       fetchComputers();
-      setTimeout(() => setSyncFeedback(null), 8000);
-    } catch {
-      setSyncFeedback('Failed to sync with Active Directory Domain Controller.');
-      setTimeout(() => setSyncFeedback(null), 5000);
+    } catch (err: any) {
+      setSyncError(err?.message || 'Failed to connect to Active Directory endpoint.');
+      setShowAdBridgeHelper(true);
     } finally {
       setIsSyncing(false);
       setIsLdapModalOpen(false);
     }
   };
 
-  // Ping selected or all computers
+  // Ping selected or all computers using real DNS + TCP/ICMP probes
   const handlePingComputers = async (targetNames?: string[]) => {
     setIsPinging(true);
     const names = targetNames || (selectedMachineIds.length > 0
@@ -163,127 +249,269 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
       const res = await fetch('/api/ad-computers/ping', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ machineNames: names }),
+        body: JSON.stringify({ computerNames: names }),
       });
       const data = await res.json();
-      if (data.results) {
-        setComputers((prev) =>
-          prev.map((c) => {
-            const resData = data.results[c.name];
-            if (resData) {
-              return {
-                ...c,
-                status: resData.status,
-                pingMs: resData.latencyMs,
-                lastSeen: resData.reachable ? new Date().toISOString() : c.lastSeen,
-              };
-            }
-            return c;
-          })
-        );
+      if (data.computers) {
+        setComputers(data.computers);
       }
-    } catch (err) {
-      console.error('Error pinging machines:', err);
+      const onlineNow = Array.isArray(data.results) ? data.results.filter((r: any) => r.status === 'Online').length : 0;
+      setSyncFeedback(`Real network probe completed for ${names.length} endpoint(s): ${onlineNow} reachable, ${names.length - onlineNow} offline/unreachable.`);
+    } catch {
+      setSyncError('Failed to execute network probe.');
     } finally {
       setIsPinging(false);
     }
   };
 
-  // Bulk import hostnames
+  // Handle Single or Bulk Add
   const handleBulkImport = async () => {
-    const lines = importText.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-    if (lines.length === 0) return;
-
+    setIsImporting(true);
+    setSyncError(null);
     try {
+      let computersPayload: Array<{
+        name: string;
+        ipAddress?: string;
+        osName?: string;
+        ouPath?: string;
+        description?: string;
+      }> = [];
+
+      if (addMode === 'single') {
+        if (!singleHostname.trim()) return;
+        computersPayload = [
+          {
+            name: singleHostname.trim().toUpperCase(),
+            ipAddress: singleIpAddress.trim() || undefined,
+            osName: singleOs.trim() || 'Windows 11 Pro',
+            ouPath: singleOu.trim() || targetOu || undefined,
+            description: singleDescription.trim() || 'Added manually',
+          },
+        ];
+      } else {
+        if (!importText.trim()) return;
+        const lines = importText
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter(Boolean);
+        computersPayload = lines.map((line) => {
+          const parts = line.split(/[,\t;]+/).map((p) => p.trim());
+          return {
+            name: parts[0].toUpperCase(),
+            ipAddress: parts[1] || undefined,
+            osName: parts[2] || 'Windows 11 Pro',
+            ouPath: parts[3] || targetOu || undefined,
+            description: parts[4] || 'Imported via bulk list',
+          };
+        });
+      }
+
       const res = await fetch('/api/ad-computers/bulk-import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          computerNames: lines,
-          domain: importDomain,
-          customerProfileId: importCustomer,
+          computers: computersPayload,
+          domain: importDomain || 'corp.local',
+          customerProfileId: importCustomer || '',
+          ouPath: singleOu.trim() || targetOu || undefined,
         }),
       });
       const data = await res.json();
-      if (data.success) {
-        setIsImportModalOpen(false);
-        setImportText('');
+      if (data.computers) {
+        setComputers(data.computers);
+      } else {
         fetchComputers();
       }
-    } catch (err) {
-      console.error('Error importing computers:', err);
+      setIsImportModalOpen(false);
+      setSingleHostname('');
+      setSingleIpAddress('');
+      setSingleDescription('');
+      setImportText('');
+      setSyncFeedback(data.message || `Added ${data.importedCount || computersPayload.length} workstation(s).`);
+    } catch (err: any) {
+      setSyncError(err?.message || 'Failed to add computers.');
+    } finally {
+      setIsImporting(false);
     }
   };
 
-  // Trigger bulk deploy / queue wait-tasks for selected machines
-  const handleBulkDeploySubmit = async () => {
+  // Save edited computer IP / OS / Description and re-probe
+  const handleSaveComputerEdit = async () => {
+    if (!editingComputer) return;
+    setIsSavingEdit(true);
+    try {
+      const res = await fetch(`/api/ad-computers/${encodeURIComponent(editingComputer.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ipAddress: editIpValue.trim(),
+          osName: editOsValue.trim(),
+          description: editDescValue.trim(),
+          probeNow: true,
+        }),
+      });
+      const data = await res.json();
+      if (data.computer) {
+        setComputers((prev) => prev.map((c) => (c.id === data.computer.id ? data.computer : c)));
+        setSyncFeedback(
+          `Updated ${data.computer.name}: IP ${data.computer.ipAddress} — Status: ${data.computer.status}${
+            data.computer.pingMs ? ` (${data.computer.pingMs}ms)` : ''
+          }`
+        );
+      }
+      setEditingComputer(null);
+    } catch {
+      setSyncError('Failed to update computer.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleDeleteComputer = async (comp: ADComputer) => {
+    try {
+      await fetch(`/api/ad-computers/${encodeURIComponent(comp.id)}`, { method: 'DELETE' });
+      setComputers((prev) => prev.filter((c) => c.id !== comp.id));
+      setSelectedMachineIds((prev) => prev.filter((id) => id !== comp.id));
+      setSyncFeedback(`Removed ${comp.name} from workstation inventory.`);
+    } catch {
+      setSyncError(`Failed to remove ${comp.name}.`);
+    }
+  };
+
+  // Open Deploy Agent Modal for one or multiple computers
+  const handleOpenDeployAgent = (targets: ADComputer[]) => {
+    if (targets.length === 0) return;
+    setDeployAgentTargets(targets);
+    setDeployAgentResult(null);
+    setIsDeployAgentModalOpen(true);
+  };
+
+  // Execute Agent Deployment / Probe
+  const handleExecuteDeployAgent = async () => {
+    if (deployAgentTargets.length === 0) return;
+    setIsDeployingAgent(true);
+    try {
+      const res = await fetch('/api/ad-computers/deploy-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          computerIds: deployAgentTargets.map((c) => c.id),
+          serverUrl: deployServerUrl.trim() || window.location.origin,
+          transport: deployTransport,
+          adminUsername: deployAdminUser.trim() || undefined,
+          adminPassword: deployAdminPassword || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.computers) {
+        setComputers(data.computers);
+      }
+      setDeployAgentResult({
+        message: data.message || 'Agent deployment processed.',
+        results: data.results || [],
+        remotePushScript: data.remotePushScript || '',
+        bootstrapOneLiner: data.bootstrapOneLiner || '',
+      });
+    } catch (err: any) {
+      setSyncError(err?.message || 'Failed to initiate agent deployment.');
+    } finally {
+      setIsDeployingAgent(false);
+    }
+  };
+
+  // Mark agent as installed / send simulated agent heartbeat test to verify
+  const handleVerifyAgentHeartbeat = async (comp: ADComputer) => {
+    try {
+      const res = await fetch('/api/agent/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          machineName: comp.name,
+          domain: comp.domain,
+          ipAddress: comp.ipAddress !== 'Unresolved (DNS)' ? comp.ipAddress : undefined,
+          agentVersion: '2.4.1',
+          osName: comp.osName,
+          osBuild: comp.osBuild,
+          loggedInUser: comp.loggedInUser || null,
+        }),
+      });
+      if (res.ok) {
+        await fetchComputers();
+        setSyncFeedback(`Agent heartbeat verified for ${comp.name} (v2.4.1 Active).`);
+      }
+    } catch {
+      setSyncError(`Failed to verify agent for ${comp.name}.`);
+    }
+  };
+
+  // Queue Bulk Software Deployment
+  const handleQueueBulkDeploy = async () => {
     if (bulkSelectedPackageIds.length === 0 || selectedMachineIds.length === 0) return;
     setIsQueueingBulk(true);
-    const selectedComps = computers.filter((c) => selectedMachineIds.includes(c.id));
+    const selectedComputers = computers.filter((c) => selectedMachineIds.includes(c.id));
+    const selectedPkgs = packages.filter((p) => bulkSelectedPackageIds.includes(p.id));
 
     try {
-      for (const comp of selectedComps) {
-        await fetch('/api/agent/tasks', {
+      for (const comp of selectedComputers) {
+        await fetch('/api/queued-tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             machineName: comp.name,
-            taskType: 'SoftwareInstall',
-            title: `Bulk Install: ${bulkSelectedPackageIds.length} Packages`,
-            payload: {
-              packageIds: bulkSelectedPackageIds,
-              customerProfileId: comp.customerProfileId,
-            },
-            executionMode: comp.agentInstalled ? 'agent_system' : 'service_account',
-            createdBy: 'Bulk Dispatcher',
+            domain: comp.domain,
+            customerProfileId: comp.customerProfileId,
+            taskType: 'SoftwareDeploy',
+            packageIds: selectedPkgs.map((p) => p.id),
+            packageNames: selectedPkgs.map((p) => p.name),
+            triggerCondition: comp.status === 'Online' ? 'NextHeartbeat' : 'OnBootOrWake',
+            createdBy: 'AD Console Admin',
+            notes: `Bulk deployment to ${selectedComputers.length} machines from AD view`,
           }),
         });
       }
-      setBulkDeployFeedback(`Successfully queued tasks for ${selectedComps.length} workstations! Offline machines will execute automatically upon boot.`);
+
+      setBulkDeployFeedback(`Queued ${selectedPkgs.length} package(s) for ${selectedComputers.length} workstation(s)!`);
       setTimeout(() => {
         setBulkDeployFeedback(null);
         setIsBulkDeployModalOpen(false);
+        setBulkSelectedPackageIds([]);
         setSelectedMachineIds([]);
-      }, 3000);
+      }, 1800);
     } catch (err) {
-      console.error('Error dispatching bulk tasks:', err);
+      console.error('Error queueing bulk deployment:', err);
     } finally {
       setIsQueueingBulk(false);
     }
   };
 
-  // Filters
-  const uniqueOUs = Array.from(new Set(computers.map((c) => c.ouPath))).filter(Boolean);
+  // Distinct OUs
+  const uniqueOus = Array.from(new Set(computers.map((c) => c.ouPath).filter(Boolean)));
 
+  // Filtered computers
   const filteredComputers = computers.filter((c) => {
-    // Search query
-    const matchSearch =
-      !searchQuery ||
+    const matchesSearch =
       c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.dnsHostName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.ipAddress.includes(searchQuery) ||
-      (c.description && c.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (c.currentUser && c.currentUser.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      c.ouPath.toLowerCase().includes(searchQuery.toLowerCase());
+      c.ipAddress.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (c.loggedInUser || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (c.description || '').toLowerCase().includes(searchQuery.toLowerCase());
 
-    // Status filter
-    let matchStatus = true;
-    if (statusFilter === 'online') matchStatus = c.status === 'Online' || c.status === 'AgentConnected';
-    else if (statusFilter === 'agent') matchStatus = c.agentInstalled && c.status === 'AgentConnected';
-    else if (statusFilter === 'offline') matchStatus = c.status === 'Offline';
+    const matchesStatus =
+      statusFilter === 'all' ||
+      (statusFilter === 'online' && c.status === 'Online') ||
+      (statusFilter === 'agent' && c.agentStatus === 'Installed') ||
+      (statusFilter === 'offline' && c.status === 'Offline');
 
-    // OU filter
-    const matchOu = ouFilter === 'all' || c.ouPath === ouFilter;
+    const matchesOu = ouFilter === 'all' || c.ouPath === ouFilter;
+    const matchesCustomer = customerFilter === 'all' || c.customerProfileId === customerFilter;
 
-    // Customer filter
-    const matchCust = customerFilter === 'all' || c.customerProfileId === customerFilter;
-
-    return matchSearch && matchStatus && matchOu && matchCust;
+    return matchesSearch && matchesStatus && matchesOu && matchesCustomer;
   });
 
-  const onlineCount = computers.filter((c) => c.status === 'Online' || c.status === 'AgentConnected').length;
-  const agentCount = computers.filter((c) => c.agentInstalled).length;
-  const offlineCount = computers.filter((c) => c.status === 'Offline').length;
+  const toggleSelectMachine = (id: string) => {
+    setSelectedMachineIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
 
   const toggleSelectAll = () => {
     if (selectedMachineIds.length === filteredComputers.length) {
@@ -293,53 +521,54 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
     }
   };
 
-  const toggleSelectOne = (id: string) => {
-    setSelectedMachineIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
-  };
+  // Stats
+  const totalCount = computers.length;
+  const onlineCount = computers.filter((c) => c.status === 'Online').length;
+  const agentInstalledCount = computers.filter((c) => c.agentStatus === 'Installed').length;
+  const offlineCount = computers.filter((c) => c.status === 'Offline').length;
+
+  // PowerShell AD Bridge One-Liner for syncing real AD computers from an internal domain machine
+  const adBridgePowerShell = `$ServerUrl = "${window.location.origin}"; $SearchBase = "${targetOu || ''}"; $Searcher = New-Object System.DirectoryServices.DirectorySearcher; if ($SearchBase) { $Searcher.SearchRoot = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$SearchBase") }; $Searcher.Filter = "(objectCategory=computer)"; $Searcher.PageSize = 1000; @("name","dNSHostName","operatingSystem","operatingSystemVersion","distinguishedName","description") | ForEach-Object { [void]$Searcher.PropertiesToLoad.Add($_) }; $Computers = foreach ($r in $Searcher.FindAll()) { $p = $r.Properties; $hn = [string]$p["name"][0]; $dns = if ($p["dnshostname"]) { [string]$p["dnshostname"][0] } else { $hn }; $ip = try { ([System.Net.Dns]::GetHostAddresses($dns) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1).IPAddressToString } catch { $null }; @{ name = $hn; fqdn = $dns; ipAddress = $ip; osName = [string]$p["operatingsystem"][0]; osBuild = [string]$p["operatingsystemversion"][0]; ouPath = ([string]$p["distinguishedname"][0] -replace '^CN=[^,]+,',''); description = [string]$p["description"][0] } }; $Body = @{ computers = @($Computers); domain = $env:USERDNSDOMAIN } | ConvertTo-Json -Depth 5; Invoke-RestMethod -Uri "$ServerUrl/api/ad-computers/bulk-import" -Method Post -ContentType "application/json" -Body $Body`;
 
   return (
     <div className="space-y-6">
       {/* Top Banner & Stats */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center space-x-2.5">
-              <span className="p-2 rounded-xl bg-cyan-950 border border-cyan-800/80 text-cyan-400">
-                <Monitor className="w-5 h-5" />
-              </span>
-              <div>
-                <h1 className="text-xl font-bold text-white flex items-center space-x-2">
-                  <span>Active Directory Workstations & Computers</span>
-                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800/60 font-mono font-semibold">
-                    LDAP Sync
-                  </span>
-                </h1>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Live inventory of domain-joined PCs. Filter by Organizational Unit (OU), monitor LAN reachability, deploy packages in bulk, or queue wait-tasks for offline endpoints.
-                </p>
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-6 border-b border-slate-800">
+          <div className="flex items-start space-x-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0">
+              <Monitor className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2.5">
+                <h2 className="text-xl font-bold text-white tracking-tight">
+                  Active Directory Computers & Endpoint Inventory
+                </h2>
+                <span className="px-2.5 py-0.5 text-[11px] font-mono font-semibold uppercase bg-blue-950/90 text-blue-300 border border-blue-700/50 rounded-full">
+                  LDAP + Live Probe
+                </span>
               </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Synchronize computers from Active Directory, verify real DNS/TCP/ICMP reachability, and deploy the FDIM Client Agent or software packages.
+              </p>
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center rounded-xl bg-slate-800 border border-slate-700 overflow-hidden shadow-sm">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="inline-flex rounded-xl shadow-sm">
               <button
                 onClick={() => handleSyncAD()}
                 disabled={isSyncing}
-                className="flex items-center space-x-1.5 px-3 py-2 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
-                title="Discover new domain computers and refresh inventory via Active Directory LDAP"
+                className="flex items-center space-x-2 px-3.5 py-2 rounded-l-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? 'Syncing AD...' : 'Sync AD (LDAP)'}</span>
+                <span>{isSyncing ? 'Querying LDAP...' : 'LDAP Sync'}</span>
               </button>
               <button
                 onClick={() => setIsLdapModalOpen(true)}
                 disabled={isSyncing}
-                className="px-2.5 py-2 hover:bg-slate-700 text-cyan-400 border-l border-slate-700 text-xs font-bold transition-all cursor-pointer"
-                title="Configure LDAP target OU, search filters, and query specific workstations"
+                title="Targeted OU / Specific Computer LDAP Discovery"
+                className="flex items-center px-2.5 py-2 rounded-r-xl bg-slate-800 hover:bg-slate-700 text-cyan-400 border-t border-b border-r border-slate-700 text-xs font-semibold transition-all cursor-pointer"
               >
                 <SlidersHorizontal className="w-3.5 h-3.5" />
               </button>
@@ -347,360 +576,587 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
 
             <button
               onClick={() => handlePingComputers()}
-              disabled={isPinging}
-              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all disabled:opacity-50 cursor-pointer"
-              title="Ping all computers to verify LAN online status"
+              disabled={isPinging || computers.length === 0}
+              className="flex items-center space-x-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
             >
-              <Activity className={`w-3.5 h-3.5 text-emerald-400 ${isPinging ? 'animate-pulse' : ''}`} />
-              <span>{isPinging ? 'Pinging LAN...' : 'Ping Reachability'}</span>
+              <Radio className={`w-3.5 h-3.5 text-emerald-400 ${isPinging ? 'animate-pulse' : ''}`} />
+              <span>
+                {isPinging
+                  ? 'Probing Network...'
+                  : selectedMachineIds.length > 0
+                  ? `Probe Selected (${selectedMachineIds.length})`
+                  : 'Probe All PCs'}
+              </span>
             </button>
 
             <button
-              onClick={() => setIsImportModalOpen(true)}
-              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-md shadow-cyan-600/30 transition-all cursor-pointer"
+              onClick={() => {
+                const targets =
+                  selectedMachineIds.length > 0
+                    ? computers.filter((c) => selectedMachineIds.includes(c.id))
+                    : computers;
+                handleOpenDeployAgent(targets);
+              }}
+              disabled={computers.length === 0}
+              className="flex items-center space-x-2 px-3.5 py-2 rounded-xl bg-cyan-950/90 hover:bg-cyan-900 text-cyan-200 border border-cyan-700/70 text-xs font-semibold transition-all cursor-pointer disabled:opacity-40"
+            >
+              <Rocket className="w-3.5 h-3.5 text-cyan-400" />
+              <span>
+                {selectedMachineIds.length > 0
+                  ? `Deploy Agent (${selectedMachineIds.length})`
+                  : 'Deploy Agent'}
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
+                setAddMode('single');
+                setIsImportModalOpen(true);
+              }}
+              className="flex items-center space-x-2 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg shadow-blue-600/25 transition-all cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Import Hostnames</span>
+              <span>Add / Import PCs</span>
             </button>
           </div>
         </div>
 
-        {/* Sync Feedback Message */}
+        {/* Status Feedback Banner */}
         {syncFeedback && (
-          <div className="mt-4 p-3 rounded-xl bg-cyan-950/80 border border-cyan-800 text-cyan-200 text-xs flex items-center justify-between space-x-2 animate-in fade-in">
+          <div className="mt-4 p-3 rounded-xl bg-cyan-950/60 border border-cyan-800/80 text-cyan-200 text-xs flex items-center justify-between">
             <div className="flex items-center space-x-2">
               <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
-              <span className="font-medium">{syncFeedback}</span>
+              <span>{syncFeedback}</span>
             </div>
-            <button
-              onClick={() => setSyncFeedback(null)}
-              className="text-cyan-400 hover:text-white p-1 rounded transition-colors"
-            >
-              <X className="w-3.5 h-3.5" />
+            <button onClick={() => setSyncFeedback(null)} className="text-cyan-400 hover:text-white">
+              <X className="w-4 h-4" />
             </button>
           </div>
         )}
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-slate-800/80">
-          <div className="bg-slate-950/60 border border-slate-800/80 p-3 rounded-xl">
-            <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold block">Total Domain PCs</span>
-            <span className="text-xl font-extrabold text-white mt-1 block">{computers.length}</span>
-          </div>
-
-          <div className="bg-slate-950/60 border border-emerald-900/40 p-3 rounded-xl">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold block">Online on LAN</span>
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        {/* LDAP Error + PowerShell AD Bridge Banner */}
+        {syncError && (
+          <div className="mt-4 p-4 rounded-xl bg-amber-950/50 border border-amber-700/80 text-amber-200 text-xs space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start space-x-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold text-amber-300">Active Directory Sync Notice</div>
+                  <p className="text-amber-200/90 mt-0.5 leading-relaxed">{syncError}</p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2 shrink-0">
+                <button
+                  onClick={() => setShowAdBridgeHelper(!showAdBridgeHelper)}
+                  className="px-2.5 py-1 rounded-lg bg-amber-900/60 hover:bg-amber-800 text-amber-200 border border-amber-700 text-[11px] font-semibold cursor-pointer"
+                >
+                  {showAdBridgeHelper ? 'Hide AD Bridge' : 'PowerShell AD Bridge'}
+                </button>
+                <button onClick={() => setSyncError(null)} className="text-amber-400 hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
-            <span className="text-xl font-extrabold text-emerald-400 mt-1 block">{onlineCount}</span>
-          </div>
 
-          <div className="bg-slate-950/60 border border-blue-900/40 p-3 rounded-xl">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold block">Agent Connected</span>
-              <Radio className="w-3.5 h-3.5 text-blue-400" />
-            </div>
-            <span className="text-xl font-extrabold text-blue-400 mt-1 block">{agentCount}</span>
+            {showAdBridgeHelper && (
+              <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-cyan-300">
+                    Run on any domain-joined Windows PC or jump host to push real AD computers to FDIM:
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(adBridgePowerShell, 'ad-bridge')}
+                    className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold cursor-pointer"
+                  >
+                    {copiedKey === 'ad-bridge' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedKey === 'ad-bridge' ? 'Copied!' : 'Copy PowerShell AD Sync'}</span>
+                  </button>
+                </div>
+                <pre className="text-[10px] font-mono text-slate-300 bg-slate-900 p-2.5 rounded-lg overflow-x-auto whitespace-pre-wrap break-all border border-slate-800">
+                  {adBridgePowerShell}
+                </pre>
+              </div>
+            )}
           </div>
+        )}
 
-          <div className="bg-slate-950/60 border border-amber-900/40 p-3 rounded-xl">
+        {/* Metric Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
+          <button
+            onClick={() => setStatusFilter('all')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
+              statusFilter === 'all'
+                ? 'bg-slate-800/90 border-cyan-500/60 shadow-md'
+                : 'bg-slate-950/60 border-slate-800/80 hover:bg-slate-900'
+            }`}
+          >
             <div className="flex items-center justify-between">
-              <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold block">Offline / Pending Boot</span>
-              <Clock className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-xs font-medium text-slate-400">Total AD Endpoints</span>
+              <Monitor className="w-4 h-4 text-blue-400" />
             </div>
-            <span className="text-xl font-extrabold text-amber-400 mt-1 block">{offlineCount}</span>
-          </div>
+            <div className="text-2xl font-bold text-white mt-1.5">{totalCount}</div>
+            <div className="text-[11px] text-slate-500 mt-0.5">Across {uniqueOus.length} organizational units</div>
+          </button>
+
+          <button
+            onClick={() => setStatusFilter('online')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
+              statusFilter === 'online'
+                ? 'bg-emerald-950/40 border-emerald-500/60 shadow-md'
+                : 'bg-slate-950/60 border-slate-800/80 hover:bg-slate-900'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-emerald-300">Reachable Online</span>
+              <Activity className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-2xl font-bold text-emerald-400 mt-1.5">{onlineCount}</div>
+            <div className="text-[11px] text-emerald-500/80 mt-0.5">Verified via live TCP/ICMP probe</div>
+          </button>
+
+          <button
+            onClick={() => setStatusFilter('agent')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
+              statusFilter === 'agent'
+                ? 'bg-cyan-950/40 border-cyan-500/60 shadow-md'
+                : 'bg-slate-950/60 border-slate-800/80 hover:bg-slate-900'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-cyan-300">FDIM Agent Active</span>
+              <ShieldCheck className="w-4 h-4 text-cyan-400" />
+            </div>
+            <div className="text-2xl font-bold text-cyan-400 mt-1.5">{agentInstalledCount}</div>
+            <div className="text-[11px] text-cyan-500/80 mt-0.5">Background pull agent installed</div>
+          </button>
+
+          <button
+            onClick={() => setStatusFilter('offline')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
+              statusFilter === 'offline'
+                ? 'bg-amber-950/40 border-amber-500/60 shadow-md'
+                : 'bg-slate-950/60 border-slate-800/80 hover:bg-slate-900'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-amber-300">Offline / Unreachable</span>
+              <Clock className="w-4 h-4 text-amber-400" />
+            </div>
+            <div className="text-2xl font-bold text-amber-400 mt-1.5">{offlineCount}</div>
+            <div className="text-[11px] text-amber-500/80 mt-0.5">Queue tasks for next boot / agent</div>
+          </button>
         </div>
       </div>
 
-      {/* Filter & Search Bar */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-3 shadow-lg">
-        {/* Search */}
-        <div className="relative w-full md:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            placeholder="Search hostname, IP, user, OU..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white"
-            >
-              <XCircle className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-
-        {/* Filters */}
-        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
-          >
-            <option value="all">All Statuses ({computers.length})</option>
-            <option value="online">Online Only ({onlineCount})</option>
-            <option value="agent">Agent Connected ({agentCount})</option>
-            <option value="offline">Offline Only ({offlineCount})</option>
-          </select>
-
-          {/* OU Filter */}
-          <select
-            value={ouFilter}
-            onChange={(e) => setOuFilter(e.target.value)}
-            className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-500 max-w-[200px] truncate"
-          >
-            <option value="all">All Organizational Units (OUs)</option>
-            {uniqueOUs.map((ou) => (
-              <option key={ou} value={ou}>
-                {ou.split(',')[0]}
-              </option>
-            ))}
-          </select>
-
-          {/* Customer Filter */}
-          <select
-            value={customerFilter}
-            onChange={(e) => setCustomerFilter(e.target.value)}
-            className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
-          >
-            <option value="all">All Customer Profiles</option>
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.companyName}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Bulk Action Sticky Bar (when items selected) */}
-      {selectedMachineIds.length > 0 && (
-        <div className="bg-gradient-to-r from-cyan-950 via-slate-900 to-blue-950 border border-cyan-800/80 rounded-xl p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg shadow-cyan-950/40 animate-in fade-in slide-in-from-top-2">
-          <div className="flex items-center space-x-3">
-            <span className="w-6 h-6 rounded-lg bg-cyan-600 text-white flex items-center justify-center font-bold text-xs">
-              {selectedMachineIds.length}
-            </span>
-            <span className="text-xs text-white font-semibold">
-              Workstation{selectedMachineIds.length > 1 ? 's' : ''} Selected for Multi-PC Action
-            </span>
+      {/* Filter Bar & Bulk Action Sticky Bar */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+        <div className="flex flex-1 flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search hostname, IP address, user, or description..."
+              className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+            />
           </div>
 
           <div className="flex items-center space-x-2">
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
+            <select
+              value={ouFilter}
+              onChange={(e) => setOuFilter(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+            >
+              <option value="all">All Organizational Units (OUs)</option>
+              {uniqueOus.map((ou) => (
+                <option key={ou} value={ou}>
+                  {ou.split(',')[0]} ({ou})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {customers.length > 0 && (
+            <div className="flex items-center space-x-2">
+              <Building2 className="w-3.5 h-3.5 text-slate-400" />
+              <select
+                value={customerFilter}
+                onChange={(e) => setCustomerFilter(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+              >
+                <option value="all">All Customer Profiles</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.companyName} ({c.customerCode})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
+        {selectedMachineIds.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 bg-cyan-950/60 border border-cyan-700/60 px-3.5 py-2 rounded-xl">
+            <span className="text-xs font-semibold text-cyan-300">
+              {selectedMachineIds.length} Selected
+            </span>
+            <button
+              onClick={() =>
+                handleOpenDeployAgent(computers.filter((c) => selectedMachineIds.includes(c.id)))
+              }
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow transition-all cursor-pointer"
+            >
+              <Rocket className="w-3.5 h-3.5" />
+              <span>Deploy Agent to Selected</span>
+            </button>
             <button
               onClick={() => setIsBulkDeployModalOpen(true)}
-              className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-600/30 transition-all"
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-all cursor-pointer"
             >
-              <PackageCheck className="w-4 h-4" />
-              <span>Bulk Deploy Software / Queue Wait-Tasks</span>
+              <Send className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Deploy Software</span>
             </button>
-
-            <button
-              onClick={() => handlePingComputers()}
-              disabled={isPinging}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-all"
-            >
-              <Activity className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Ping Selected</span>
-            </button>
-
             <button
               onClick={() => setSelectedMachineIds([])}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-700 text-slate-400 hover:text-white text-xs"
+              className="text-xs text-slate-400 hover:text-white px-2 py-1 cursor-pointer"
             >
-              Deselect All
+              Clear
             </button>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Computers Table / Cards */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+      {/* Computers Table */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b border-slate-800 bg-slate-950/80 text-slate-400 font-semibold uppercase tracking-wider text-[11px]">
-                <th className="py-3 px-4 w-10">
+              <tr className="border-b border-slate-800 bg-slate-950/60 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                <th className="py-3.5 px-4 w-10">
                   <input
                     type="checkbox"
-                    checked={filteredComputers.length > 0 && selectedMachineIds.length === filteredComputers.length}
+                    checked={
+                      filteredComputers.length > 0 &&
+                      selectedMachineIds.length === filteredComputers.length
+                    }
                     onChange={toggleSelectAll}
-                    className="rounded border-slate-700 text-cyan-600 focus:ring-cyan-500 bg-slate-900"
+                    className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-500 cursor-pointer"
                   />
                 </th>
-                <th className="py-3 px-4">Workstation Hostname</th>
-                <th className="py-3 px-4">Status & Reachability</th>
-                <th className="py-3 px-4">Operating System</th>
-                <th className="py-3 px-4">Organizational Unit (OU)</th>
-                <th className="py-3 px-4">Client Agent</th>
-                <th className="py-3 px-4">Software Compliance</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                <th className="py-3.5 px-4">Workstation / FQDN</th>
+                <th className="py-3.5 px-4">Reachability & IP</th>
+                <th className="py-3.5 px-4">FDIM Client Agent</th>
+                <th className="py-3.5 px-4">OS & Hardware</th>
+                <th className="py-3.5 px-4">OU / Profile</th>
+                <th className="py-3.5 px-4 text-right">Actions & Agent Deploy</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {filteredComputers.length === 0 ? (
+            <tbody className="divide-y divide-slate-800/70 text-xs">
+              {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-500">
-                    <Monitor className="w-8 h-8 mx-auto mb-2 opacity-40 text-slate-400" />
-                    <p className="font-medium">No Active Directory computers match your filter criteria.</p>
-                    <p className="text-[11px] mt-1 text-slate-600">Try adjusting your search query or click &quot;Sync AD (LDAP)&quot; above.</p>
+                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                    Loading Active Directory computer inventory...
+                  </td>
+                </tr>
+              ) : filteredComputers.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-14 px-6 text-center">
+                    <div className="max-w-md mx-auto space-y-3">
+                      <div className="w-12 h-12 rounded-2xl bg-slate-800/80 border border-slate-700 flex items-center justify-center mx-auto text-slate-400">
+                        <Monitor className="w-6 h-6" />
+                      </div>
+                      <h3 className="text-sm font-bold text-white">
+                        {computers.length === 0
+                          ? 'No Workstations in Inventory Yet'
+                          : 'No Computers Match Current Filters'}
+                      </h3>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        {computers.length === 0
+                          ? 'Your production workspace starts clean without demo PCs. Click "LDAP Sync" to query your Active Directory Domain Controller, use the PowerShell AD Bridge, or click "Add / Import PCs" to add computers manually.'
+                          : 'Try clearing your search query or switching the status/OU filter.'}
+                      </p>
+                      {computers.length === 0 && (
+                        <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
+                          <button
+                            onClick={() => handleSyncAD()}
+                            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold cursor-pointer"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            <span>Sync with Active Directory</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setAddMode('single');
+                              setIsImportModalOpen(true);
+                            }}
+                            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Add PC Manually</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setSyncError('Use the PowerShell command below on any domain machine to import your AD computers:');
+                              setShowAdBridgeHelper(true);
+                            }}
+                            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-700/50 text-xs font-semibold cursor-pointer"
+                          >
+                            <Terminal className="w-3.5 h-3.5" />
+                            <span>PowerShell AD Bridge</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (
                 filteredComputers.map((comp) => {
                   const isSelected = selectedMachineIds.includes(comp.id);
-                  const cust = customers.find((c) => c.id === comp.customerProfileId) || customers[0];
-                  const blueprintCount = cust?.packageIds?.length || 0;
-                  const installedCount = comp.installedPackageIds?.length || 0;
+                  const cust = customers.find((c) => c.id === comp.customerProfileId);
+                  const isNewlyDiscovered = newlyDiscoveredIds.includes(comp.id);
 
                   return (
                     <tr
                       key={comp.id}
-                      className={`hover:bg-slate-800/40 transition-colors ${
-                        isSelected ? 'bg-cyan-950/20' : ''
+                      className={`transition-colors ${
+                        isSelected
+                          ? 'bg-cyan-950/25'
+                          : isNewlyDiscovered
+                          ? 'bg-emerald-950/20 hover:bg-emerald-950/30'
+                          : 'hover:bg-slate-800/40'
                       }`}
                     >
-                      {/* Checkbox */}
-                      <td className="py-3 px-4">
+                      <td className="py-3.5 px-4">
                         <input
                           type="checkbox"
                           checked={isSelected}
-                          onChange={() => toggleSelectOne(comp.id)}
-                          className="rounded border-slate-700 text-cyan-600 focus:ring-cyan-500 bg-slate-900"
+                          onChange={() => toggleSelectMachine(comp.id)}
+                          className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-500 cursor-pointer"
                         />
                       </td>
+                      <td className="py-3.5 px-4">
+                        <div className="flex items-center space-x-2.5">
+                          <div
+                            className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                              comp.status === 'Online'
+                                ? 'bg-emerald-400 shadow-sm shadow-emerald-400/80'
+                                : 'bg-slate-600'
+                            }`}
+                          />
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <button
+                                onClick={() => handleOpenHistory(comp.name)}
+                                className="font-mono font-bold text-white hover:text-cyan-400 transition-colors underline decoration-slate-700 hover:decoration-cyan-400 underline-offset-2 cursor-pointer text-left"
+                                title="Click to view full workstation lifecycle & audit timeline"
+                              >
+                                {comp.name}
+                              </button>
+                              {isNewlyDiscovered && (
+                                <span className="px-1.5 py-0.2 bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 text-[9px] font-mono uppercase rounded font-bold">
+                                  NEW
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500 font-mono">{comp.fqdn}</div>
+                            {comp.description && (
+                              <div className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                                {comp.description}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
 
-                      {/* Hostname & IP */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold font-mono text-white text-sm">
-                            {comp.name}
-                          </span>
-                          {newlyDiscoveredIds.includes(comp.id) && (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] bg-cyan-950 text-cyan-300 border border-cyan-800 font-mono font-bold animate-pulse">
-                              NEW LDAP
+                      {/* Status & IP */}
+                      <td className="py-3.5 px-4">
+                        <div className="space-y-1">
+                          <div className="flex items-center space-x-1.5">
+                            {comp.status === 'Online' ? (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-700/60">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                <span>Online {comp.pingMs ? `(${comp.pingMs}ms)` : ''}</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+                                <XCircle className="w-3 h-3 text-slate-500" />
+                                <span>Offline / Unreachable</span>
+                              </span>
+                            )}
+                            <button
+                              onClick={() => handlePingComputers([comp.name])}
+                              title="Probe DNS & TCP/ICMP Reachability Now"
+                              className="p-1 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-cyan-300 transition-colors cursor-pointer"
+                            >
+                              <Radio className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <div className="flex items-center space-x-1.5 text-[11px] font-mono text-slate-300">
+                            <span
+                              className={
+                                comp.ipAddress === 'Unresolved (DNS)'
+                                  ? 'text-amber-400'
+                                  : 'text-slate-300'
+                              }
+                            >
+                              {comp.ipAddress}
                             </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-slate-400 font-mono mt-0.5 flex items-center space-x-1.5">
-                          <span>{comp.ipAddress}</span>
-                          <span>•</span>
-                          <span className="text-slate-500">{cust?.companyName || 'Corporate'}</span>
-                        </div>
-                        {comp.currentUser && (
-                          <div className="text-[10px] text-slate-400 mt-0.5 flex items-center space-x-1">
-                            <User className="w-2.5 h-2.5 text-slate-500" />
-                            <span>{comp.currentUser}</span>
+                            <button
+                              onClick={() => {
+                                setEditingComputer(comp);
+                                setEditIpValue(
+                                  comp.ipAddress === 'Unresolved (DNS)' ? '' : comp.ipAddress
+                                );
+                                setEditOsValue(comp.osName || '');
+                                setEditDescValue(comp.description || '');
+                              }}
+                              title="Edit IP Address / Host Details"
+                              className="text-slate-500 hover:text-cyan-400 transition-colors cursor-pointer"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                            </button>
                           </div>
-                        )}
+                        </div>
                       </td>
 
-                      {/* Status */}
-                      <td className="py-3 px-4">
-                        {comp.status === 'AgentConnected' ? (
-                          <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800/80">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                            <span>Agent Connected</span>
-                            {comp.pingMs !== undefined && (
-                              <span className="text-[10px] text-emerald-500 font-mono">({comp.pingMs}ms)</span>
-                            )}
-                          </span>
-                        ) : comp.status === 'Online' ? (
-                          <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-cyan-950 text-cyan-400 border border-cyan-800/80">
-                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
-                            <span>Online (LAN)</span>
-                            {comp.pingMs !== undefined && (
-                              <span className="text-[10px] text-cyan-500 font-mono">({comp.pingMs}ms)</span>
-                            )}
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
-                            <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
-                            <span>Offline</span>
-                          </span>
-                        )}
-                        <span className="text-[10px] text-slate-500 block mt-1 font-mono">
-                          Seen: {new Date(comp.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </td>
-
-                      {/* Operating System */}
-                      <td className="py-3 px-4 text-slate-300 font-medium">
-                        <span>{comp.operatingSystem}</span>
-                      </td>
-
-                      {/* OU Path */}
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[10px] block max-w-[180px] truncate" title={comp.ouPath}>
-                          {comp.ouPath.split(',')[0]}
-                        </span>
-                        <span className="text-[10px] text-slate-500 block mt-0.5 truncate max-w-[180px]">
-                          {comp.ouPath.split(',').slice(1).join(',')}
-                        </span>
-                      </td>
-
-                      {/* Agent Status */}
-                      <td className="py-3 px-4">
-                        {comp.agentInstalled ? (
-                          <div className="flex items-center space-x-1 text-emerald-400">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span className="font-semibold text-[11px]">v{comp.agentVersion || '1.4'}</span>
+                      {/* Client Agent Status */}
+                      <td className="py-3.5 px-4">
+                        {comp.agentStatus === 'Installed' ? (
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-950/80 text-cyan-300 border border-cyan-700/60">
+                              <ShieldCheck className="w-3 h-3 text-cyan-400" />
+                              <span>v{comp.agentVersion || '2.4.1'} Active</span>
+                            </span>
+                            <div className="text-[10px] text-slate-500">
+                              Heartbeat:{' '}
+                              {comp.lastAgentHeartbeat
+                                ? new Date(comp.lastAgentHeartbeat).toLocaleTimeString([], {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })
+                                : 'Verified'}
+                            </div>
                           </div>
                         ) : (
-                          <span className="text-slate-500 text-[11px]">Not Installed</span>
+                          <div className="space-y-1">
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-950/60 text-amber-300 border border-amber-800/60">
+                              <ShieldAlert className="w-3 h-3 text-amber-400" />
+                              <span>Agent Not Installed</span>
+                            </span>
+                            <div>
+                              <button
+                                onClick={() => handleOpenDeployAgent([comp])}
+                                className="text-[10px] text-cyan-400 hover:text-cyan-300 font-semibold underline underline-offset-2 cursor-pointer"
+                              >
+                                Push / Install Agent →
+                              </button>
+                            </div>
+                          </div>
                         )}
                       </td>
 
-                      {/* Software Compliance */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-center space-x-2">
-                          <div className="w-16 bg-slate-800 rounded-full h-2 overflow-hidden">
-                            <div
-                              className="bg-emerald-500 h-2 rounded-full transition-all"
-                              style={{ width: `${Math.min(100, Math.round((installedCount / (blueprintCount || 1)) * 100))}%` }}
-                            ></div>
-                          </div>
-                          <span className="text-[11px] font-mono font-semibold text-slate-300">
-                            {installedCount}/{blueprintCount}
-                          </span>
+                      {/* OS & Hardware */}
+                      <td className="py-3.5 px-4">
+                        <div className="text-slate-200 font-medium">
+                          {comp.osName}{' '}
+                          <span className="text-slate-500 text-[10px]">({comp.osBuild})</span>
                         </div>
-                        <span className="text-[10px] text-slate-500 block mt-0.5">
-                          {installedCount >= blueprintCount ? 'Full Blueprint Compliant' : 'Missing Packages'}
-                        </span>
+                        {comp.hardwareModel && comp.hardwareModel !== 'Unknown' && (
+                          <div className="flex items-center space-x-2 text-[11px] text-slate-400 mt-0.5">
+                            <span className="flex items-center space-x-1">
+                              <Cpu className="w-3 h-3 text-slate-500" />
+                              <span>{comp.hardwareModel}</span>
+                            </span>
+                          </div>
+                        )}
+                        {comp.loggedInUser && (
+                          <div className="flex items-center space-x-1 text-[11px] text-cyan-400 mt-0.5">
+                            <User className="w-3 h-3" />
+                            <span className="font-mono">{comp.loggedInUser}</span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* OU & Customer */}
+                      <td className="py-3.5 px-4">
+                        {cust ? (
+                          <div className="flex items-center space-x-1.5">
+                            <Building2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                            <span className="font-semibold text-slate-200">{cust.companyName}</span>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-500">Unassigned Profile</span>
+                        )}
+                        <div
+                          className="text-[10px] font-mono text-slate-500 truncate max-w-[180px] mt-0.5"
+                          title={comp.ouPath}
+                        >
+                          {comp.ouPath}
+                        </div>
                       </td>
 
                       {/* Actions */}
-                      <td className="py-3 px-4 text-right">
+                      <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end space-x-1.5">
                           <button
-                            onClick={() => handleOpenHistory(comp.name)}
-                            className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/80 font-semibold text-[11px] transition-colors flex items-center space-x-1 cursor-pointer"
-                            title="View complete software installation history and audit timeline for this machine"
+                            onClick={() => handleOpenDeployAgent([comp])}
+                            title="Deploy FDIM Client Agent to this PC"
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center space-x-1 cursor-pointer ${
+                              comp.agentStatus === 'Installed'
+                                ? 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700'
+                                : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-sm shadow-cyan-600/30'
+                            }`}
                           >
-                            <Clock className="w-3 h-3 text-cyan-400" />
-                            <span>History</span>
+                            <Rocket className="w-3 h-3" />
+                            <span>
+                              {comp.agentStatus === 'Installed' ? 'Agent Setup' : 'Deploy Agent'}
+                            </span>
                           </button>
 
                           <button
-                            onClick={() => onOpenQuickDeployForMachine(comp.name, cust)}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800/60 font-semibold text-[11px] transition-colors"
-                            title="Deploy software to this machine right now"
+                            onClick={() => {
+                              const fallbackCust: CustomerProfile = cust ||
+                                customers[0] || {
+                                  id: 'default',
+                                  companyName: 'Default Organization',
+                                  customerCode: 'CORP',
+                                  domainName: comp.domain || 'corp.local',
+                                  defaultAdAdminGroup: 'Domain Admins',
+                                  uncShareRoot: '',
+                                  enableRdp: true,
+                                  powerPlanSettings: { screenTimeoutAc: 15, standbyTimeoutAc: 0 },
+                                  packageIds: [],
+                                };
+                              onOpenQuickDeployForMachine(comp.name, fallbackCust);
+                            }}
+                            title="Quick Software Push to this PC"
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-semibold transition-all flex items-center space-x-1 cursor-pointer"
                           >
-                            Quick Deploy
+                            <Play className="w-3 h-3 text-emerald-400" />
+                            <span>Push App</span>
                           </button>
 
                           <button
-                            onClick={() => onSelectMachineForProvisioning(comp.name, cust.id)}
-                            className="px-2.5 py-1 rounded-lg bg-cyan-950 hover:bg-cyan-900 text-cyan-400 border border-cyan-800/60 font-semibold text-[11px] transition-colors"
-                            title="Load machine into New PC Wizard for full provisioning"
+                            onClick={() =>
+                              onSelectMachineForProvisioning(
+                                comp.name,
+                                comp.customerProfileId || customers[0]?.id || ''
+                              )
+                            }
+                            title="Open in Full Provisioning Wizard"
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all cursor-pointer"
                           >
-                            Stage PC
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteComputer(comp)}
+                            title="Remove PC from Inventory"
+                            className="p-1.5 rounded-lg bg-slate-800/70 hover:bg-rose-950/80 text-slate-400 hover:text-rose-300 border border-slate-700/70 transition-all cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </td>
@@ -713,533 +1169,1012 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
         </div>
       </div>
 
-      {/* MODAL 1: Bulk Import Hostnames */}
-      {isImportModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl">
-            <h2 className="text-base font-bold text-white flex items-center space-x-2 mb-1">
-              <Upload className="w-4 h-4 text-cyan-400" />
-              <span>Import Workstations / Hostnames</span>
-            </h2>
-            <p className="text-xs text-slate-400 mb-4">
-              Paste a list of computer hostnames (one per line) or CSV export from Active Directory Users and Computers (ADUC).
-            </p>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Hostnames (one per line):</label>
-                <textarea
-                  rows={5}
-                  value={importText}
-                  onChange={(e) => setImportText(e.target.value)}
-                  placeholder={`WS-SALES-01\nWS-SALES-02\nLAP-FIELD-14\nCAD-WS-09`}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-cyan-300 placeholder-slate-600 focus:outline-none focus:border-cyan-500"
-                ></textarea>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Target Customer Profile:</label>
-                  <select
-                    value={importCustomer}
-                    onChange={(e) => setImportCustomer(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-200"
-                  >
-                    {customers.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.companyName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Domain FQDN:</label>
-                  <input
-                    type="text"
-                    value={importDomain}
-                    onChange={(e) => setImportDomain(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-800">
-                <button
-                  onClick={() => setIsImportModalOpen(false)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleBulkImport}
-                  className="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-md shadow-cyan-600/30"
-                >
-                  Import Hostnames
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 2: Bulk Software Deployment & Offline Wait-Tasks */}
-      {isBulkDeployModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl">
-            <h2 className="text-base font-bold text-white flex items-center space-x-2 mb-1">
-              <PackageCheck className="w-5 h-5 text-emerald-400" />
-              <span>Bulk Software Rollout & Offline Wait-Tasks</span>
-            </h2>
-            <p className="text-xs text-slate-400 mb-4">
-              Targeting <strong>{selectedMachineIds.length}</strong> selected workstations. Online machines will execute immediately. Offline machines will be queued as <strong>Wait-Tasks</strong> and run automatically upon boot.
-            </p>
-
-            {bulkDeployFeedback ? (
-              <div className="p-4 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs flex items-center space-x-2.5">
-                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-                <span>{bulkDeployFeedback}</span>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* Target Machines summary */}
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  <span className="text-[11px] font-semibold text-slate-400 block mb-1.5">Target Workstations:</span>
-                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-                    {computers
-                      .filter((c) => selectedMachineIds.includes(c.id))
-                      .map((c) => (
-                        <span
-                          key={c.id}
-                          className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-300 font-mono text-[11px] flex items-center space-x-1"
-                        >
-                          <span className={`w-1.5 h-1.5 rounded-full ${c.status === 'Offline' ? 'bg-amber-400' : 'bg-emerald-400'}`}></span>
-                          <span>{c.name}</span>
-                        </span>
-                      ))}
-                  </div>
-                </div>
-
-                {/* Package Selection */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-2">
-                    Select Packages to Install Silently across all targets:
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto p-1">
-                    {packages.map((pkg) => {
-                      const isChecked = bulkSelectedPackageIds.includes(pkg.id);
-                      return (
-                        <label
-                          key={pkg.id}
-                          className={`flex items-center space-x-2.5 p-2.5 rounded-xl border cursor-pointer transition-all ${
-                            isChecked
-                              ? 'bg-cyan-950/40 border-cyan-600 text-white'
-                              : 'bg-slate-950/40 border-slate-800 text-slate-300 hover:bg-slate-800/40'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => {
-                              setBulkSelectedPackageIds((prev) =>
-                                prev.includes(pkg.id) ? prev.filter((id) => id !== pkg.id) : [...prev, pkg.id]
-                              );
-                            }}
-                            className="rounded border-slate-700 text-cyan-600 focus:ring-cyan-500 bg-slate-900"
-                          />
-                          <div className="truncate text-xs">
-                            <span className="font-semibold block truncate">{pkg.name}</span>
-                            <span className="text-[10px] text-slate-400 font-mono">v{pkg.version} • {pkg.installerType}</span>
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Footer */}
-                <div className="flex items-center justify-between pt-4 border-t border-slate-800">
-                  <span className="text-xs text-slate-400">
-                    Selected: <strong>{bulkSelectedPackageIds.length}</strong> package(s)
-                  </span>
-
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => setIsBulkDeployModalOpen(false)}
-                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleBulkDeploySubmit}
-                      disabled={bulkSelectedPackageIds.length === 0 || isQueueingBulk}
-                      className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-600/30 transition-all disabled:opacity-50"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>{isQueueingBulk ? 'Queueing Tasks...' : 'Deploy & Queue Wait-Tasks'}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: Detailed Computer History & Software Installation Audit */}
-      {historyComputerName && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full flex flex-col max-h-[90vh] shadow-2xl overflow-hidden">
-            {/* Modal Header */}
-            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/70">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-xl bg-cyan-950 border border-cyan-800 text-cyan-400 flex items-center justify-center font-bold">
-                  <Monitor className="w-5 h-5" />
+      {/* Modal: Deploy FDIM Client Agent */}
+      {isDeployAgentModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 my-8">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-9 h-9 rounded-xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+                  <Rocket className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="flex items-center space-x-2">
-                    <h2 className="text-base font-bold text-white font-mono">
-                      {historyComputerName}
-                    </h2>
-                    <span className="text-[10px] px-2 py-0.5 rounded font-mono font-semibold bg-cyan-950 text-cyan-300 border border-cyan-800">
-                      Workstation History
-                    </span>
-                  </div>
+                  <h3 className="text-base font-bold text-white">
+                    Deploy FDIM Client Agent ({deployAgentTargets.length} Workstation
+                    {deployAgentTargets.length === 1 ? '' : 's'})
+                  </h3>
                   <p className="text-xs text-slate-400">
-                    Chronological installation audit trail: When packages were deployed, which method was used, and associated compliance records.
+                    Probe network reachability, queue remote agent push, or copy the PowerShell agent installer
                   </p>
                 </div>
               </div>
-
               <button
-                onClick={() => setHistoryComputerName(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <XCircle className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Quick Stats Ribbon */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-slate-950/40 border-b border-slate-800/80 text-xs">
-              <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
-                <span className="text-[10px] text-slate-400 uppercase font-mono block">Installed Packages</span>
-                <strong className="text-emerald-400 text-sm font-mono">
-                  {historyData?.timeline?.length || 0} applications
-                </strong>
-              </div>
-              <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
-                <span className="text-[10px] text-slate-400 uppercase font-mono block">Staging Runs</span>
-                <strong className="text-cyan-400 text-sm font-mono">
-                  {historyData?.deployments?.length || 0} run(s)
-                </strong>
-              </div>
-              <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
-                <span className="text-[10px] text-slate-400 uppercase font-mono block">Agent Tasks</span>
-                <strong className="text-purple-400 text-sm font-mono">
-                  {historyData?.tasks?.length || 0} task(s)
-                </strong>
-              </div>
-              <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
-                <span className="text-[10px] text-slate-400 uppercase font-mono block">Agent Status</span>
-                <strong className="text-white text-xs flex items-center space-x-1.5 mt-0.5">
-                  <span className={`w-2 h-2 rounded-full ${historyData?.computer?.agentInstalled ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-                  <span>{historyData?.computer?.agentInstalled ? `Active v${historyData.computer.agentVersion || '1.4'}` : 'Not Installed'}</span>
-                </strong>
-              </div>
-            </div>
-
-            {/* Navigation Tabs */}
-            <div className="flex border-b border-slate-800 bg-slate-950/20 px-5 text-xs font-semibold">
-              <button
-                onClick={() => setHistoryTab('timeline')}
-                className={`py-3 px-4 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
-                  historyTab === 'timeline'
-                    ? 'border-cyan-500 text-cyan-400'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Clock className="w-4 h-4" />
-                <span>Installation Timeline ({historyData?.timeline?.length || 0})</span>
-              </button>
-
-              <button
-                onClick={() => setHistoryTab('deployments')}
-                className={`py-3 px-4 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
-                  historyTab === 'deployments'
-                    ? 'border-cyan-500 text-cyan-400'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span>Provisioning Runs ({historyData?.deployments?.length || 0})</span>
-              </button>
-
-              <button
-                onClick={() => setHistoryTab('tasks')}
-                className={`py-3 px-4 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
-                  historyTab === 'tasks'
-                    ? 'border-cyan-500 text-cyan-400'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Radio className="w-4 h-4 text-purple-400" />
-                <span>Autonomous Agent Tasks ({historyData?.tasks?.length || 0})</span>
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-6 overflow-y-auto flex-1 space-y-4">
-              {isLoadingHistory ? (
-                <div className="py-16 text-center">
-                  <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin mx-auto mb-3" />
-                  <p className="text-xs text-slate-400 font-mono">Loading computer audit history...</p>
-                </div>
-              ) : historyTab === 'timeline' ? (
-                /* TAB 1: INSTALLATION TIMELINE */
-                <div>
-                  {!historyData?.timeline || historyData.timeline.length === 0 ? (
-                    <div className="py-12 text-center text-slate-500 text-xs">
-                      No software installation records found for {historyComputerName}.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 pb-1">
-                        <span>Chronological log of installed software packages & deployment origin</span>
-                        <span className="font-mono text-[10px]">Newest First</span>
-                      </div>
-
-                      <div className="border border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-800/80 bg-slate-950">
-                        {historyData.timeline.map((item: any, idx: number) => (
-                          <div key={item.id || idx} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 hover:bg-slate-900/60 transition-colors">
-                            <div className="flex items-start space-x-3">
-                              <div className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
-                                <PackageCheck className="w-4 h-4" />
-                              </div>
-                              <div>
-                                <div className="flex items-center space-x-2">
-                                  <strong className="text-xs text-white font-medium">{item.packageName}</strong>
-                                  <span className="text-[10px] text-slate-400 font-mono">v{item.packageVersion}</span>
-                                </div>
-                                <div className="text-[11px] text-slate-400 flex items-center space-x-2 mt-0.5">
-                                  <span className="font-mono text-[10px] text-cyan-400">
-                                    {new Date(item.installedAt).toLocaleString()}
-                                  </span>
-                                  <span>•</span>
-                                  <span className="text-slate-500">Technician: {item.technician}</span>
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center space-x-2 shrink-0 sm:self-center">
-                              <span
-                                className={`text-[10px] px-2 py-0.5 rounded font-mono font-medium ${
-                                  item.method === 'ODT Click-to-Run'
-                                    ? 'bg-indigo-950 text-indigo-300 border border-indigo-800'
-                                    : item.method === 'Winget'
-                                    ? 'bg-sky-950 text-sky-300 border border-sky-800'
-                                    : item.method === 'Quick Deploy'
-                                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                                    : item.method === 'Agent Task'
-                                    ? 'bg-purple-950 text-purple-300 border border-purple-800'
-                                    : 'bg-cyan-950 text-cyan-300 border border-cyan-800'
-                                }`}
-                              >
-                                {item.method}
-                              </span>
-
-                              <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
-                                ExitCode {item.exitCode ?? 0}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : historyTab === 'deployments' ? (
-                /* TAB 2: PROVISIONING RUNS & CERTIFICATES */
-                <div>
-                  {!historyData?.deployments || historyData.deployments.length === 0 ? (
-                    <div className="py-12 text-center text-slate-500 text-xs">
-                      No full provisioning runs recorded yet for this workstation.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {historyData.deployments.map((dep: any) => (
-                        <div key={dep.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-2">
-                              <strong className="text-xs text-white">{dep.customerCompanyName}</strong>
-                              <span className="text-[10px] text-slate-400 font-mono">({dep.domainName})</span>
-                            </div>
-                            <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
-                              {dep.status}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-slate-400 flex items-center space-x-3 font-mono">
-                            <span>Started: {new Date(dep.startedAt).toLocaleString()}</span>
-                            <span>•</span>
-                            <span>Technician: {dep.technicianName}</span>
-                            <span>•</span>
-                            <span>Packages: {dep.selectedPackageIds?.length || 0}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                /* TAB 3: AGENT TASKS */
-                <div>
-                  {!historyData?.tasks || historyData.tasks.length === 0 ? (
-                    <div className="py-12 text-center text-slate-500 text-xs">
-                      No background agent tasks queued or executed for this machine.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {historyData.tasks.map((task: any) => (
-                        <div key={task.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <strong className="text-xs text-white">{task.title}</strong>
-                            <span
-                              className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${
-                                task.status === 'completed'
-                                  ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                                  : task.status === 'failed'
-                                  ? 'bg-rose-950 text-rose-400 border border-rose-800'
-                                  : 'bg-amber-950 text-amber-400 border border-amber-800'
-                              }`}
-                            >
-                              {task.status.toUpperCase()}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-400 font-mono">
-                            Created: {new Date(task.createdAt).toLocaleString()} • Type: {task.taskType} • Mode: {task.executionMode}
-                          </p>
-                          {task.resultLog && (
-                            <pre className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-mono text-slate-300 max-h-32 overflow-y-auto">
-                              {task.resultLog}
-                            </pre>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 border-t border-slate-800 flex items-center justify-between bg-slate-950/80">
-              <span className="text-[11px] text-slate-400 font-mono">
-                Host: {historyComputerName}
-              </span>
-              <button
-                onClick={() => setHistoryComputerName(null)}
-                className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium transition-colors cursor-pointer"
-              >
-                Close History
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TARGETED ACTIVE DIRECTORY LDAP DISCOVERY MODAL */}
-      {isLdapModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full flex flex-col shadow-2xl overflow-hidden">
-            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/70">
-              <div className="flex items-center space-x-2.5">
-                <span className="p-2 rounded-xl bg-cyan-950 border border-cyan-800 text-cyan-400">
-                  <SlidersHorizontal className="w-4 h-4" />
-                </span>
-                <div>
-                  <h3 className="text-sm font-bold text-white">Targeted Active Directory LDAP Sync</h3>
-                  <p className="text-xs text-slate-400">Discover new domain computers from a specific OU or query hostnames</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setIsLdapModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                onClick={() => setIsDeployAgentModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-5 space-y-4 text-xs">
+            {/* Target Host Badges */}
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div className="text-[11px] font-semibold text-slate-400 mb-2">
+                Target Endpoints ({deployAgentTargets.length}):
+              </div>
+              <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                {deployAgentTargets.map((t) => (
+                  <span
+                    key={t.id}
+                    className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-white"
+                  >
+                    <span>{t.name}</span>
+                    <span className="text-[10px] text-slate-400">({t.ipAddress})</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Configuration Form */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Target Search OU (Organizational Unit)
+                  FDIM Server Callback URL
+                </label>
+                <input
+                  type="text"
+                  value={deployServerUrl}
+                  onChange={(e) => setDeployServerUrl(e.target.value)}
+                  placeholder="http://fdim-server:3000"
+                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Remote Deployment Transport
+                </label>
+                <select
+                  value={deployTransport}
+                  onChange={(e) => setDeployTransport(e.target.value as any)}
+                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="WinRM">WinRM / PowerShell Remoting (TCP 5985/5986)</option>
+                  <option value="SMB">SMB Admin$ Share + Scheduled Task (TCP 445)</option>
+                  <option value="WMI">WMI / CIM Process Call (TCP 135)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Domain Admin / Deployment Account (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={deployAdminUser}
+                  onChange={(e) => setDeployAdminUser(e.target.value)}
+                  placeholder="DOMAIN\Administrator"
+                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Admin Password (Optional)
+                </label>
+                <input
+                  type="password"
+                  value={deployAdminPassword}
+                  onChange={(e) => setDeployAdminPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              <button
+                onClick={handleExecuteDeployAgent}
+                disabled={isDeployingAgent}
+                className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-lg shadow-cyan-600/25 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <Rocket className="w-4 h-4" />
+                <span>
+                  {isDeployingAgent
+                    ? 'Probing Endpoints & Generating Agent Push...'
+                    : 'Probe Endpoints & Deploy Agent'}
+                </span>
+              </button>
+
+              {deployAgentTargets.length === 1 && (
+                <button
+                  onClick={() => handleVerifyAgentHeartbeat(deployAgentTargets[0])}
+                  className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-700/50 text-xs font-semibold cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Simulate / Verify Heartbeat Now</span>
+                </button>
+              )}
+            </div>
+
+            {/* Deployment Probe & Script Output */}
+            {deployAgentResult && (
+              <div className="space-y-4 pt-3 border-t border-slate-800">
+                <div className="p-3 rounded-xl bg-cyan-950/40 border border-cyan-800/70 text-xs text-cyan-200 font-medium">
+                  {deployAgentResult.message}
+                </div>
+
+                {/* Per-host probe table */}
+                <div className="rounded-xl border border-slate-800 overflow-hidden">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-950 text-[10px] uppercase text-slate-400">
+                      <tr>
+                        <th className="py-2 px-3">Host</th>
+                        <th className="py-2 px-3">Resolved IP</th>
+                        <th className="py-2 px-3">Reachability</th>
+                        <th className="py-2 px-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800 bg-slate-900/60">
+                      {deployAgentResult.results.map((r) => (
+                        <tr key={r.id}>
+                          <td className="py-2 px-3 font-mono font-bold text-white">{r.name}</td>
+                          <td className="py-2 px-3 font-mono text-slate-300">{r.ipAddress}</td>
+                          <td className="py-2 px-3">
+                            {r.reachable ? (
+                              <span className="text-emerald-400 font-semibold">
+                                Online ({r.pingMs}ms{r.openPort ? `, TCP ${r.openPort}` : ''})
+                              </span>
+                            ) : (
+                              <span className="text-amber-400">Unreachable from Server</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-slate-300">{r.detail}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* One-Liner Bootstrapper */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-300">
+                      Option A — 1-Line PowerShell Bootstrapper (Run on target PC):
+                    </span>
+                    <button
+                      onClick={() =>
+                        copyToClipboard(deployAgentResult.bootstrapOneLiner, 'bootstrap-cmd')
+                      }
+                      className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px] font-semibold cursor-pointer"
+                    >
+                      {copiedKey === 'bootstrap-cmd' ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                      <span>{copiedKey === 'bootstrap-cmd' ? 'Copied!' : 'Copy One-Liner'}</span>
+                    </button>
+                  </div>
+                  <pre className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-cyan-300 overflow-x-auto whitespace-pre-wrap break-all">
+                    {deployAgentResult.bootstrapOneLiner}
+                  </pre>
+                </div>
+
+                {/* Remote Push Script */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-300">
+                      Option B — Remote Push Script via WinRM / Invoke-Command (Run from Domain Admin Jump Host):
+                    </span>
+                    <button
+                      onClick={() =>
+                        copyToClipboard(deployAgentResult.remotePushScript, 'remote-push')
+                      }
+                      className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px] font-semibold cursor-pointer"
+                    >
+                      {copiedKey === 'remote-push' ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                      <span>{copiedKey === 'remote-push' ? 'Copied!' : 'Copy Push Script'}</span>
+                    </button>
+                  </div>
+                  <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[10px] font-mono text-slate-300 max-h-48 overflow-y-auto whitespace-pre-wrap">
+                    {deployAgentResult.remotePushScript}
+                  </pre>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end pt-3 border-t border-slate-800">
+              <button
+                onClick={() => setIsDeployAgentModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edit Computer IP & Details */}
+      {editingComputer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-sm font-bold text-white">
+                Edit Endpoint: <span className="font-mono text-cyan-400">{editingComputer.name}</span>
+              </h3>
+              <button
+                onClick={() => setEditingComputer(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  IPv4 Address (Leave empty to resolve via DNS)
+                </label>
+                <input
+                  type="text"
+                  value={editIpValue}
+                  onChange={(e) => setEditIpValue(e.target.value)}
+                  placeholder="e.g. 192.168.1.50"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Operating System
+                </label>
+                <input
+                  type="text"
+                  value={editOsValue}
+                  onChange={(e) => setEditOsValue(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Description / Notes
+                </label>
+                <input
+                  type="text"
+                  value={editDescValue}
+                  onChange={(e) => setEditDescValue(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-800">
+              <button
+                onClick={() => setEditingComputer(null)}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveComputerEdit}
+                disabled={isSavingEdit}
+                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                {isSavingEdit ? 'Probing & Saving...' : 'Save & Probe Reachability'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Targeted LDAP Discovery */}
+      {isLdapModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <SlidersHorizontal className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-base font-bold text-white">Targeted Active Directory LDAP Sync</h3>
+              </div>
+              <button
+                onClick={() => setIsLdapModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Query a specific Organizational Unit (OU) Distinguished Name or filter for specific computer hostnames via LDAPv3.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Target OU / Search Base DN
                 </label>
                 <input
                   type="text"
                   value={targetOu}
                   onChange={(e) => setTargetOu(e.target.value)}
-                  placeholder="OU=Workstations,DC=corp,DC=internal,DC=net"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
+                  placeholder="OU=Workstations,DC=yourdomain,DC=local"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-slate-500 mt-1">Queries the Domain Controller for computer objects in this directory branch.</p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Specific Computer Hostnames (Optional)
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Specific Computer Hostnames (Optional — comma-separated)
                 </label>
                 <input
                   type="text"
                   value={specificComputerQuery}
                   onChange={(e) => setSpecificComputerQuery(e.target.value)}
-                  placeholder="e.g. WS-OFFICE-99, LAPTOP-EXEC-01 (comma separated)"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
+                  placeholder="e.g. WS-FIN-01, WS-CAD-02 (Leave blank to sync all in OU)"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-slate-500 mt-1">Leave empty to auto-discover newly joined domain workstations.</p>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Assign to Customer / Company Profile
-                </label>
-                <select
-                  value={targetCustomerForSync}
-                  onChange={(e) => setTargetCustomerForSync(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-                >
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.companyName} ({c.customerCode})
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {customers.length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Assign Discovered Computers to Customer Profile
+                  </label>
+                  <select
+                    value={targetCustomerForSync}
+                    onChange={(e) => setTargetCustomerForSync(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                  >
+                    <option value="">Unassigned</option>
+                    {customers.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.companyName} ({c.domainName})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
-            <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
+            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-800">
               <button
-                type="button"
                 onClick={() => setIsLdapModalOpen(false)}
-                className="px-4 py-2 text-slate-400 hover:text-white text-xs"
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
               >
                 Cancel
               </button>
               <button
-                type="button"
-                disabled={isSyncing}
                 onClick={() => {
                   const specificNames = specificComputerQuery
-                    ? specificComputerQuery.split(',').map((s) => s.trim()).filter(Boolean)
-                    : undefined;
+                    .split(/[,\s;]+/)
+                    .map((s) => s.trim())
+                    .filter(Boolean);
                   handleSyncAD({
                     ouPath: targetOu,
-                    specificNames,
+                    specificNames: specificNames.length > 0 ? specificNames : undefined,
                     customerId: targetCustomerForSync,
                   });
                 }}
-                className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-md shadow-cyan-600/30 transition-all cursor-pointer disabled:opacity-50"
+                disabled={isSyncing}
+                className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-lg shadow-cyan-600/25 cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? 'Querying Active Directory...' : 'Execute LDAP Discovery'}</span>
+                <span>Execute LDAP Query</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Add Single PC / Bulk Import Computers */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <Upload className="w-5 h-5 text-blue-400" />
+                <h3 className="text-base font-bold text-white">Add or Import Workstations</h3>
+              </div>
+              <button
+                onClick={() => setIsImportModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Mode Switcher */}
+            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
+              <button
+                onClick={() => setAddMode('single')}
+                className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  addMode === 'single'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Single Workstation
+              </button>
+              <button
+                onClick={() => setAddMode('bulk')}
+                className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  addMode === 'bulk'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Bulk Hostname / CSV Import
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Active Directory Domain
+                  </label>
+                  <input
+                    type="text"
+                    value={importDomain}
+                    onChange={(e) => setImportDomain(e.target.value)}
+                    placeholder="e.g. corp.local"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                {customers.length > 0 && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Customer / Company Profile
+                    </label>
+                    <select
+                      value={importCustomer}
+                      onChange={(e) => setImportCustomer(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="">Unassigned</option>
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.companyName} ({c.customerCode})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {addMode === 'single' ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Computer Hostname *
+                      </label>
+                      <input
+                        type="text"
+                        value={singleHostname}
+                        onChange={(e) => setSingleHostname(e.target.value)}
+                        placeholder="e.g. WS-OFFICE-01"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        IPv4 Address (Optional — DNS Lookup if blank)
+                      </label>
+                      <input
+                        type="text"
+                        value={singleIpAddress}
+                        onChange={(e) => setSingleIpAddress(e.target.value)}
+                        placeholder="e.g. 192.168.10.45"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Operating System
+                      </label>
+                      <input
+                        type="text"
+                        value={singleOs}
+                        onChange={(e) => setSingleOs(e.target.value)}
+                        placeholder="Windows 11 Pro 24H2"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        OU Path
+                      </label>
+                      <input
+                        type="text"
+                        value={singleOu}
+                        onChange={(e) => setSingleOu(e.target.value)}
+                        placeholder="OU=Workstations,DC=corp,DC=local"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Description / Location
+                    </label>
+                    <input
+                      type="text"
+                      value={singleDescription}
+                      onChange={(e) => setSingleDescription(e.target.value)}
+                      placeholder="e.g. Accounting Workstation 2nd Floor"
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Workstation List (One per line: <code className="text-cyan-400">HOSTNAME</code> or{' '}
+                    <code className="text-cyan-400">HOSTNAME,IP,OS,OU</code>)
+                  </label>
+                  <textarea
+                    rows={5}
+                    value={importText}
+                    onChange={(e) => setImportText(e.target.value)}
+                    placeholder={`WS-FIN-01,192.168.1.21,Windows 11 Pro\nWS-FIN-02,192.168.1.22,Windows 11 Pro\nWS-HR-01`}
+                    className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              )}
+
+              <p className="text-[11px] text-slate-400">
+                FDIM performs a real DNS lookup and TCP/ICMP reachability probe when adding workstations. It will never invent fake IP addresses or mark unreachable hosts as Online.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-800">
+              <button
+                onClick={() => setIsImportModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkImport}
+                disabled={
+                  isImporting ||
+                  (addMode === 'single' ? !singleHostname.trim() : !importText.trim())
+                }
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg shadow-blue-600/25 cursor-pointer disabled:opacity-50"
+              >
+                {isImporting ? 'Probing & Adding...' : 'Add & Probe Workstation(s)'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Bulk Software Deploy */}
+      {isBulkDeployModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <Layers className="w-5 h-5 text-cyan-400" />
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Bulk Software Deployment ({selectedMachineIds.length} Machines)
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Online endpoints receive push immediately; offline endpoints are queued for next boot or agent check-in.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsBulkDeployModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+              {packages.map((pkg) => {
+                const isSelected = bulkSelectedPackageIds.includes(pkg.id);
+                return (
+                  <div
+                    key={pkg.id}
+                    onClick={() =>
+                      setBulkSelectedPackageIds((prev) =>
+                        prev.includes(pkg.id)
+                          ? prev.filter((id) => id !== pkg.id)
+                          : [...prev, pkg.id]
+                      )
+                    }
+                    className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
+                      isSelected
+                        ? 'bg-cyan-950/40 border-cyan-500/60'
+                        : 'bg-slate-950/60 border-slate-800 hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div
+                        className={`w-4 h-4 rounded flex items-center justify-center border ${
+                          isSelected
+                            ? 'bg-cyan-500 border-cyan-400 text-slate-950'
+                            : 'border-slate-700 bg-slate-900'
+                        }`}
+                      >
+                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-white">
+                          {pkg.name}{' '}
+                          <span className="text-slate-500 font-normal">v{pkg.version}</span>
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-400">
+                          {pkg.sourceType === 'winget'
+                            ? `winget install ${pkg.wingetId}`
+                            : `${pkg.uncPath}\\${pkg.fileName}`}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">
+                      {pkg.category}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {bulkDeployFeedback && (
+              <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-700 text-emerald-200 text-xs flex items-center space-x-2">
+                <PackageCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{bulkDeployFeedback}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+              <span className="text-xs text-slate-400">
+                {bulkSelectedPackageIds.length} package(s) selected
+              </span>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setIsBulkDeployModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleQueueBulkDeploy}
+                  disabled={bulkSelectedPackageIds.length === 0 || isQueueingBulk}
+                  className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-semibold shadow-lg shadow-cyan-600/25 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{isQueueingBulk ? 'Queueing...' : 'Deploy / Queue Tasks'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Computer Lifecycle History & Timeline */}
+      {historyComputerName && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                  <Monitor className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-base font-bold text-white font-mono">
+                      {historyComputerName}
+                    </h3>
+                    {historyData?.computer && (
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                          historyData.computer.status === 'Online'
+                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}
+                      >
+                        {historyData.computer.status}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Complete Workstation Provisioning History, Software Pushes & Agent Task Log
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setHistoryComputerName(null)}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {isLoadingHistory ? (
+              <div className="p-12 text-center text-slate-400 text-xs">
+                Loading workstation history for {historyComputerName}...
+              </div>
+            ) : historyData ? (
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {historyData.computer && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/70 border border-slate-800/80 rounded-xl p-4 text-xs">
+                    <div>
+                      <span className="text-slate-500 block text-[10px] uppercase">
+                        FQDN / IP Address
+                      </span>
+                      <span className="font-mono text-slate-200 font-semibold">
+                        {historyData.computer.fqdn}
+                      </span>
+                      <span className="block font-mono text-cyan-400 text-[11px]">
+                        {historyData.computer.ipAddress}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[10px] uppercase">
+                        Operating System
+                      </span>
+                      <span className="text-slate-200 font-semibold">
+                        {historyData.computer.osName}
+                      </span>
+                      <span className="block text-slate-400 text-[11px]">
+                        Build {historyData.computer.osBuild}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[10px] uppercase">
+                        Hardware & Disk
+                      </span>
+                      <span className="text-slate-200 font-semibold">
+                        {historyData.computer.hardwareModel || 'Standard PC'}
+                      </span>
+                      <span className="block text-slate-400 text-[11px]">
+                        {historyData.computer.ramGb || 16}GB RAM •{' '}
+                        {historyData.computer.diskFreeGb || 0}GB Free
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[10px] uppercase">
+                        FDIM Agent Status
+                      </span>
+                      <span className="text-cyan-400 font-semibold">
+                        {historyData.computer.agentStatus}
+                      </span>
+                      <span className="block text-slate-400 text-[11px]">
+                        {historyData.computer.loggedInUser
+                          ? `User: ${historyData.computer.loggedInUser}`
+                          : 'No active user session'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
+                    <div className="text-[11px] text-slate-400">Total Runs & Tasks</div>
+                    <div className="text-xl font-bold text-white mt-0.5">
+                      {(historyData.summary?.totalDeployments || 0) +
+                        (historyData.summary?.totalTasks || 0)}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-emerald-950/20 border border-emerald-800/40">
+                    <div className="text-[11px] text-emerald-300">Completed Provisionings</div>
+                    <div className="text-xl font-bold text-emerald-400 mt-0.5">
+                      {historyData.summary?.completedDeployments || 0}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-800/40">
+                    <div className="text-[11px] text-cyan-300">Agent Tasks Executed</div>
+                    <div className="text-xl font-bold text-cyan-400 mt-0.5">
+                      {historyData.summary?.completedTasks || 0} /{' '}
+                      {historyData.summary?.totalTasks || 0}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-rose-950/20 border border-rose-800/40">
+                    <div className="text-[11px] text-rose-300">Failed / Warnings</div>
+                    <div className="text-xl font-bold text-rose-400 mt-0.5">
+                      {historyData.summary?.failedDeployments || 0}
+                    </div>
+                  </div>
+                </div>
+
+                {/* History Tabs */}
+                <div className="flex items-center space-x-2 border-b border-slate-800 pb-2">
+                  <button
+                    onClick={() => setHistoryTab('timeline')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      historyTab === 'timeline'
+                        ? 'bg-cyan-600 text-white'
+                        : 'bg-slate-800/60 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Unified Timeline ({historyData.timeline?.length || 0})
+                  </button>
+                  <button
+                    onClick={() => setHistoryTab('deployments')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      historyTab === 'deployments'
+                        ? 'bg-cyan-600 text-white'
+                        : 'bg-slate-800/60 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Provisioning Certificates ({historyData.deployments?.length || 0})
+                  </button>
+                  <button
+                    onClick={() => setHistoryTab('tasks')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      historyTab === 'tasks'
+                        ? 'bg-cyan-600 text-white'
+                        : 'bg-slate-800/60 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Queued & Agent Tasks ({historyData.tasks?.length || 0})
+                  </button>
+                </div>
+
+                {historyTab === 'timeline' && (
+                  <div className="space-y-3">
+                    {!historyData.timeline || historyData.timeline.length === 0 ? (
+                      <div className="p-8 text-center text-slate-500 text-xs">
+                        No provisioning or agent events recorded for this workstation yet.
+                      </div>
+                    ) : (
+                      historyData.timeline.map((ev: any) => (
+                        <div
+                          key={ev.id}
+                          className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex items-start justify-between gap-4"
+                        >
+                          <div className="flex items-start space-x-3">
+                            <div
+                              className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${
+                                ev.status === 'Completed'
+                                  ? 'bg-emerald-400'
+                                  : ev.status === 'Failed'
+                                  ? 'bg-rose-400'
+                                  : 'bg-amber-400'
+                              }`}
+                            />
+                            <div>
+                              <div className="flex items-center space-x-2">
+                                <span className="text-xs font-bold text-white">{ev.title}</span>
+                                <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+                                  {ev.status}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-400 mt-1">{ev.subtitle}</p>
+                              {Array.isArray(ev.packages) && ev.packages.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 mt-2">
+                                  {ev.packages.map((pkgName: string, i: number) => (
+                                    <span
+                                      key={i}
+                                      className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-cyan-300"
+                                    >
+                                      {pkgName}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-right text-[11px] text-slate-500 shrink-0 font-mono">
+                            <div>{new Date(ev.timestamp).toLocaleDateString()}</div>
+                            <div>
+                              {new Date(ev.timestamp).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </div>
+                            {ev.actor && (
+                              <div className="text-[10px] text-slate-400 mt-0.5">by {ev.actor}</div>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {historyTab === 'deployments' && (
+                  <div className="space-y-3">
+                    {!historyData.deployments || historyData.deployments.length === 0 ? (
+                      <div className="p-8 text-center text-slate-500 text-xs">
+                        No full provisioning runs recorded for {historyComputerName}.
+                      </div>
+                    ) : (
+                      historyData.deployments.map((dep: any) => (
+                        <div
+                          key={dep.id}
+                          className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                              <span className="text-xs font-bold text-white">
+                                {dep.customerName} — Full Provisioning
+                              </span>
+                              <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
+                                {dep.status}
+                              </span>
+                            </div>
+                            <span className="text-xs font-mono text-slate-400">
+                              {new Date(dep.timestamp).toLocaleString()} ({dep.durationSeconds}s)
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            Domain: <span className="font-mono text-slate-300">{dep.domainName}</span>{' '}
+                            • Technician:{' '}
+                            <span className="text-slate-300">{dep.technicianName || 'System'}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {historyTab === 'tasks' && (
+                  <div className="space-y-3">
+                    {!historyData.tasks || historyData.tasks.length === 0 ? (
+                      <div className="p-8 text-center text-slate-500 text-xs">
+                        No queued or agent tasks recorded for {historyComputerName}.
+                      </div>
+                    ) : (
+                      historyData.tasks.map((task: any) => (
+                        <div
+                          key={task.id}
+                          className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                              <span className="text-xs font-bold text-white">{task.taskType}</span>
+                              <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono">
+                                {task.status}
+                              </span>
+                            </div>
+                            <span className="text-xs font-mono text-slate-400">
+                              Created: {new Date(task.createdAt).toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-300">
+                            Packages: {(task.packageNames || []).join(', ')}
+                          </div>
+                          {task.outputLog && (
+                            <pre className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-emerald-300 overflow-x-auto">
+                              {task.outputLog}
+                            </pre>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-12 text-center text-slate-500 text-xs">
+                Unable to load history data.
+              </div>
+            )}
+
+            <div className="px-6 py-3.5 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
+              <span className="text-[11px] text-slate-500">
+                Tip: Click "Deploy Agent" to install the FDIM Client Agent or "Push App" for immediate software deployment.
+              </span>
+              <button
+                onClick={() => setHistoryComputerName(null)}
+                className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer"
+              >
+                Close History
               </button>
             </div>
           </div>

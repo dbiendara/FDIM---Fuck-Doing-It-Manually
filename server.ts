@@ -1,12 +1,18 @@
 import express from 'express';
 import path from 'path';
+import dns from 'dns';
+import net from 'net';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { Client as LdapClient } from 'ldapts';
 import { GoogleGenAI, Type } from '@google/genai';
 import {
   seedInitialDataIfEmpty,
   seedInitialADComputersIfEmpty,
   seedInitialQueuedTasksIfEmpty,
+  clearProductionWorkspace,
   getAllPackages,
   savePackage,
   deletePackage,
@@ -44,6 +50,8 @@ import {
   seedInitialFirstRunSnippetsIfEmpty,
 } from './server/db.ts';
 import { AuthUser, ADComputer, QueuedTask, PackageSandboxTest } from './src/types';
+
+const execFileAsync = promisify(execFile);
 
 dotenv.config();
 
@@ -1133,6 +1141,418 @@ app.post('/api/deployments', (req, res) => {
 });
 
 // -------------------------------------------------------------
+// REAL NETWORK DNS & REACHABILITY PROBE ENGINE
+// -------------------------------------------------------------
+
+function normalizeLdapUrl(rawUrl?: string): string {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return '';
+  if (/^ldaps?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.endsWith(':636')) return `ldaps://${trimmed}`;
+  return `ldap://${trimmed}`;
+}
+
+function probeTcpPort(host: string, port: number, timeoutMs = 1200): Promise<{ alive: boolean; portOpen: boolean; latencyMs: number }> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const socket = new net.Socket();
+    let settled = false;
+
+    const finish = (alive: boolean, portOpen: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({ alive, portOpen, latencyMs: Math.max(1, Date.now() - start) });
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true, true));
+    socket.once('timeout', () => finish(false, false));
+    socket.once('error', (err: any) => {
+      // ECONNREFUSED means the target IP actively replied with a TCP RST packet (host is online on LAN!)
+      if (err && err.code === 'ECONNREFUSED') {
+        finish(true, false);
+      } else {
+        finish(false, false);
+      }
+    });
+
+    try {
+      socket.connect(port, host);
+    } catch {
+      finish(false, false);
+    }
+  });
+}
+
+async function resolveAndProbeHost(
+  hostname: string,
+  explicitIp?: string,
+  domainSuffix?: string
+): Promise<{
+  ipAddress: string;
+  dnsHostName: string;
+  reachable: boolean;
+  latencyMs?: number;
+  openPorts: number[];
+}> {
+  const cleanHost = hostname.trim();
+  const domainClean = (domainSuffix || '').trim().replace(/^\.+|\.+$/g, '');
+  const fqdn =
+    cleanHost.includes('.') || !domainClean
+      ? cleanHost.toLowerCase()
+      : `${cleanHost.toLowerCase()}.${domainClean.toLowerCase()}`;
+
+  let resolvedIp = explicitIp && explicitIp.trim() && explicitIp.trim().toLowerCase() !== 'unresolved'
+    ? explicitIp.trim()
+    : '';
+
+  // If hostname itself is an IPv4 address
+  if (!resolvedIp && net.isIP(cleanHost)) {
+    resolvedIp = cleanHost;
+  }
+
+  // Real DNS lookup
+  if (!resolvedIp) {
+    try {
+      const res = await dns.promises.lookup(cleanHost, { family: 4 });
+      if (res && res.address) resolvedIp = res.address;
+    } catch {
+      if (fqdn !== cleanHost.toLowerCase()) {
+        try {
+          const resFqdn = await dns.promises.lookup(fqdn, { family: 4 });
+          if (resFqdn && resFqdn.address) resolvedIp = resFqdn.address;
+        } catch {
+          // DNS could not resolve
+        }
+      }
+    }
+  }
+
+  if (!resolvedIp) {
+    return {
+      ipAddress: 'Unresolved',
+      dnsHostName: fqdn,
+      reachable: false,
+      latencyMs: undefined,
+      openPorts: [],
+    };
+  }
+
+  // Probe standard Windows workstation ports in parallel (SMB 445, WinRM 5985/5986, RDP 3389, RPC 135)
+  const portsToCheck = [445, 5985, 5986, 3389, 135];
+  const probeResults = await Promise.all(portsToCheck.map((p) => probeTcpPort(resolvedIp, p, 1200)));
+  const aliveProbes = probeResults.filter((r) => r.alive);
+  const openPorts = portsToCheck.filter((_, idx) => probeResults[idx].portOpen);
+
+  if (aliveProbes.length > 0) {
+    const minLatency = Math.min(...aliveProbes.map((r) => r.latencyMs));
+    return {
+      ipAddress: resolvedIp,
+      dnsHostName: fqdn,
+      reachable: true,
+      latencyMs: minLatency,
+      openPorts,
+    };
+  }
+
+  // Fallback to system ICMP ping if available
+  try {
+    const start = Date.now();
+    await execFileAsync('ping', ['-c', '1', '-W', '1', resolvedIp], { timeout: 1500 });
+    return {
+      ipAddress: resolvedIp,
+      dnsHostName: fqdn,
+      reachable: true,
+      latencyMs: Math.max(1, Date.now() - start),
+      openPorts: [],
+    };
+  } catch {
+    return {
+      ipAddress: resolvedIp,
+      dnsHostName: fqdn,
+      reachable: false,
+      latencyMs: undefined,
+      openPorts: [],
+    };
+  }
+}
+
+// -------------------------------------------------------------
+// REAL ACTIVE DIRECTORY LDAPv3 CLIENT ENGINE (ldapts)
+// -------------------------------------------------------------
+
+async function testActiveDirectoryConnection(config: {
+  ldapUrl: string;
+  domain?: string;
+  baseDn?: string;
+  bindDn?: string;
+  bindPassword?: string;
+}): Promise<{
+  success: boolean;
+  message: string;
+  error?: string;
+  dcHost?: string;
+  computerCount?: number;
+}> {
+  const normalizedUrl = normalizeLdapUrl(config.ldapUrl);
+  if (!normalizedUrl) {
+    return { success: false, message: 'LDAP URL is required.', error: 'LDAP URL is required.' };
+  }
+
+  const dcHost = normalizedUrl.replace(/^ldaps?:\/\//i, '').split(':')[0].split('/')[0];
+  const client = new LdapClient({
+    url: normalizedUrl,
+    timeout: 6000,
+    connectTimeout: 5000,
+    tlsOptions: { rejectUnauthorized: false },
+  });
+
+  try {
+    if (config.bindDn && config.bindDn.trim()) {
+      await client.bind(config.bindDn.trim(), config.bindPassword || '');
+    }
+
+    let computerCount: number | undefined;
+    if (config.baseDn && config.baseDn.trim()) {
+      try {
+        const { searchEntries } = await client.search(config.baseDn.trim(), {
+          scope: 'sub',
+          filter: '(objectClass=computer)',
+          attributes: ['cn'],
+          sizeLimit: 500,
+        });
+        computerCount = searchEntries.length;
+      } catch {
+        // Base DN search optional during connection test
+      }
+    }
+
+    await client.unbind().catch(() => {});
+    return {
+      success: true,
+      dcHost,
+      computerCount,
+      message: `Successfully connected and authenticated to Domain Controller [${dcHost}]${
+        computerCount !== undefined ? ` (${computerCount} computer objects found in ${config.baseDn})` : ''
+      }.`,
+    };
+  } catch (err: any) {
+    await client.unbind().catch(() => {});
+    const code = err?.code || err?.name || 'LDAP_ERROR';
+    return {
+      success: false,
+      dcHost,
+      error: `Failed to connect to Active Directory at ${normalizedUrl} (${code}): ${err?.message || 'Unreachable or invalid credentials'}`,
+      message: `Failed to connect to Active Directory at ${normalizedUrl} (${code}): ${err?.message || 'Unreachable or invalid credentials'}`,
+    };
+  }
+}
+
+async function queryActiveDirectoryComputers(options: {
+  ldapUrl: string;
+  domain: string;
+  baseDn: string;
+  bindDn?: string;
+  bindPassword?: string;
+  searchOu?: string;
+  specificNames?: string[];
+  customerProfileId?: string;
+  defaultGlobalDomain?: string;
+}): Promise<{
+  success: boolean;
+  discovered: ADComputer[];
+  updated: ADComputer[];
+  totalFoundInAd: number;
+  searchedBase: string;
+  error?: string;
+}> {
+  const normalizedUrl = normalizeLdapUrl(options.ldapUrl);
+  if (!normalizedUrl) {
+    return {
+      success: false,
+      discovered: [],
+      updated: [],
+      totalFoundInAd: 0,
+      searchedBase: '',
+      error: 'No Active Directory LDAP URL configured. Configure AD in Settings or Setup Wizard.',
+    };
+  }
+
+  const client = new LdapClient({
+    url: normalizedUrl,
+    timeout: 8000,
+    connectTimeout: 6000,
+    tlsOptions: { rejectUnauthorized: false },
+  });
+
+  const primarySearchBase = (options.searchOu || options.baseDn || '').trim();
+  const fallbackBaseDn = (options.baseDn || '').trim();
+
+  try {
+    if (options.bindDn && options.bindDn.trim()) {
+      await client.bind(options.bindDn.trim(), options.bindPassword || '');
+    }
+
+    let filter = '(objectClass=computer)';
+    if (options.specificNames && options.specificNames.length > 0) {
+      const subFilters = options.specificNames
+        .map((n) => n.trim().replace(/[()*\\]/g, ''))
+        .filter(Boolean)
+        .map((n) => `(cn=${n})(name=${n})(sAMAccountName=${n}$)`)
+        .join('');
+      if (subFilters) {
+        filter = `(&(objectClass=computer)(|${subFilters}))`;
+      }
+    }
+
+    const attributes = [
+      'cn',
+      'name',
+      'sAMAccountName',
+      'dNSHostName',
+      'operatingSystem',
+      'operatingSystemVersion',
+      'distinguishedName',
+      'description',
+    ];
+
+    let entries: any[] = [];
+    let actualSearchedBase = primarySearchBase;
+
+    try {
+      const res = await client.search(primarySearchBase, {
+        scope: 'sub',
+        filter,
+        attributes,
+      });
+      entries = res.searchEntries || [];
+    } catch (searchErr: any) {
+      // If specific OU does not exist (e.g., computers are in CN=Computers,DC=... instead of OU=Workstations), fall back to Base DN
+      if (fallbackBaseDn && fallbackBaseDn.toLowerCase() !== primarySearchBase.toLowerCase()) {
+        actualSearchedBase = fallbackBaseDn;
+        const fallbackRes = await client.search(fallbackBaseDn, {
+          scope: 'sub',
+          filter,
+          attributes,
+        });
+        entries = fallbackRes.searchEntries || [];
+      } else {
+        throw searchErr;
+      }
+    }
+
+    // Also fall back to Base DN if the specific OU returned 0 computers and Base DN is broader
+    if (entries.length === 0 && fallbackBaseDn && fallbackBaseDn.toLowerCase() !== primarySearchBase.toLowerCase()) {
+      try {
+        const fallbackRes = await client.search(fallbackBaseDn, {
+          scope: 'sub',
+          filter,
+          attributes,
+        });
+        if (fallbackRes.searchEntries && fallbackRes.searchEntries.length > 0) {
+          entries = fallbackRes.searchEntries;
+          actualSearchedBase = fallbackBaseDn;
+        }
+      } catch {
+        // Keep empty entries
+      }
+    }
+
+    await client.unbind().catch(() => {});
+
+    const existing = getAllADComputers();
+    const discovered: ADComputer[] = [];
+    const updated: ADComputer[] = [];
+    const nowIso = new Date().toISOString();
+
+    for (const entry of entries) {
+      const rawName = String(entry.cn || entry.name || entry.sAMAccountName || '')
+        .replace(/\$$/, '')
+        .trim()
+        .toUpperCase();
+      if (!rawName) continue;
+
+      const dn = String(entry.distinguishedName || entry.dn || '');
+      const ouParts = dn.split(',').slice(1).join(',');
+      const ouPath = ouParts || actualSearchedBase;
+      const dnsHost = String(
+        entry.dNSHostName || `${rawName.toLowerCase()}.${options.defaultGlobalDomain || options.domain.toLowerCase()}`
+      );
+      const osName = String(entry.operatingSystem || 'Windows Workstation');
+      const osVer = entry.operatingSystemVersion ? ` (${entry.operatingSystemVersion})` : '';
+      const desc = entry.description
+        ? Array.isArray(entry.description)
+          ? String(entry.description[0])
+          : String(entry.description)
+        : '';
+
+      const probe = await resolveAndProbeHost(dnsHost || rawName, undefined, options.defaultGlobalDomain || options.domain);
+      const existingComp = existing.find((e) => e.name.toLowerCase() === rawName.toLowerCase());
+
+      if (existingComp) {
+        existingComp.dnsHostName = dnsHost || existingComp.dnsHostName;
+        existingComp.operatingSystem = `${osName}${osVer}`;
+        existingComp.ouPath = ouPath;
+        if (probe.ipAddress !== 'Unresolved') {
+          existingComp.ipAddress = probe.ipAddress;
+        }
+        if (desc) existingComp.description = desc;
+        if (existingComp.agentInstalled && probe.reachable) {
+          existingComp.status = 'AgentConnected';
+        } else {
+          existingComp.status = probe.reachable ? 'Online' : 'Offline';
+        }
+        existingComp.pingMs = probe.latencyMs;
+        if (probe.reachable) existingComp.lastSeen = nowIso;
+        saveADComputer(existingComp);
+        updated.push(existingComp);
+      } else {
+        const newComp: ADComputer = {
+          id: `comp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          name: rawName,
+          dnsHostName: dnsHost,
+          operatingSystem: `${osName}${osVer}`,
+          ouPath,
+          ipAddress: probe.ipAddress,
+          status: probe.reachable ? 'Online' : 'Offline',
+          pingMs: probe.latencyMs,
+          lastSeen: nowIso,
+          agentInstalled: false,
+          installedPackageIds: [],
+          customerProfileId: options.customerProfileId || getAllCustomers()[0]?.id || '',
+          description: desc || `Synced from Active Directory (${ouPath})`,
+          uptimeHours: 0,
+        };
+        saveADComputer(newComp);
+        discovered.push(newComp);
+      }
+    }
+
+    return {
+      success: true,
+      discovered,
+      updated,
+      totalFoundInAd: entries.length,
+      searchedBase: actualSearchedBase,
+    };
+  } catch (err: any) {
+    await client.unbind().catch(() => {});
+    const code = err?.code || err?.name || 'LDAP_ERROR';
+    return {
+      success: false,
+      discovered: [],
+      updated: [],
+      totalFoundInAd: 0,
+      searchedBase: primarySearchBase,
+      error: `Active Directory LDAP query failed at ${normalizedUrl} (${code}): ${
+        err?.message || 'Unable to reach Domain Controller'
+      }`,
+    };
+  }
+}
+
+// -------------------------------------------------------------
 // ACTIVE DIRECTORY COMPUTERS API
 // -------------------------------------------------------------
 
@@ -1141,26 +1561,80 @@ app.get('/api/ad-computers', (req, res) => {
   res.json(computers);
 });
 
-app.post('/api/ad-computers', (req, res) => {
-  const comp: ADComputer = {
-    id: req.body.id || `comp-${Date.now().toString(36)}`,
-    name: req.body.name.toUpperCase().trim(),
-    dnsHostName: req.body.dnsHostName || `${req.body.name.toLowerCase()}.corp.internal.net`,
-    operatingSystem: req.body.operatingSystem || 'Windows 11 Pro 23H2',
-    ouPath: req.body.ouPath || 'OU=Workstations,DC=corp,DC=internal,DC=net',
-    ipAddress: req.body.ipAddress || '192.168.10.100',
-    status: req.body.status || 'Offline',
-    lastSeen: req.body.lastSeen || new Date().toISOString(),
-    agentInstalled: !!req.body.agentInstalled,
-    agentVersion: req.body.agentVersion || (req.body.agentInstalled ? '1.4.0' : undefined),
-    installedPackageIds: req.body.installedPackageIds || [],
-    customerProfileId: req.body.customerProfileId || 'cust-acme',
-    description: req.body.description || '',
-    currentUser: req.body.currentUser,
-    uptimeHours: req.body.uptimeHours || 0,
-  };
-  saveADComputer(comp);
-  res.status(201).json(comp);
+app.post('/api/ad-computers', async (req, res) => {
+  try {
+    const rawName = String(req.body.name || '').trim().toUpperCase();
+    if (!rawName) {
+      return res.status(400).json({ error: 'Workstation hostname is required' });
+    }
+
+    const settings = getAppSettings();
+    const domainSuffix = req.body.domain || settings.defaultGlobalDomain || '';
+    const explicitIp = req.body.ipAddress ? String(req.body.ipAddress).trim() : undefined;
+
+    // Perform real DNS lookup & real network reachability probe
+    const probe = await resolveAndProbeHost(rawName, explicitIp, domainSuffix);
+
+    const existing = getADComputerByName(rawName);
+    const comp: ADComputer = {
+      id: existing?.id || req.body.id || `comp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      name: rawName,
+      dnsHostName: req.body.dnsHostName || probe.dnsHostName,
+      operatingSystem: req.body.operatingSystem || existing?.operatingSystem || 'Windows 11 Pro',
+      ouPath: req.body.ouPath || existing?.ouPath || settings.adLdapConfig?.computerSearchOu || settings.adLdapConfig?.baseDn || 'CN=Computers',
+      ipAddress: explicitIp || probe.ipAddress,
+      status: existing?.agentInstalled && probe.reachable
+        ? 'AgentConnected'
+        : (probe.reachable ? 'Online' : 'Offline'),
+      pingMs: probe.latencyMs,
+      lastSeen: new Date().toISOString(),
+      agentInstalled: req.body.agentInstalled !== undefined ? !!req.body.agentInstalled : (existing?.agentInstalled || false),
+      agentVersion: req.body.agentVersion || existing?.agentVersion || (req.body.agentInstalled ? '1.4.0' : undefined),
+      installedPackageIds: req.body.installedPackageIds || existing?.installedPackageIds || [],
+      customerProfileId: req.body.customerProfileId ?? existing?.customerProfileId ?? (getAllCustomers()[0]?.id || ''),
+      description: req.body.description !== undefined ? req.body.description : (existing?.description || 'Manually added workstation'),
+      currentUser: req.body.currentUser || existing?.currentUser,
+      uptimeHours: req.body.uptimeHours ?? existing?.uptimeHours ?? 0,
+    };
+
+    saveADComputer(comp);
+    res.status(201).json(comp);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to add workstation' });
+  }
+});
+
+app.put('/api/ad-computers/:id', async (req, res) => {
+  try {
+    const all = getAllADComputers();
+    const existing = all.find((c) => c.id === req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Workstation not found' });
+    }
+
+    const updatedName = req.body.name ? String(req.body.name).trim().toUpperCase() : existing.name;
+    const explicitIp = req.body.ipAddress !== undefined ? String(req.body.ipAddress).trim() : existing.ipAddress;
+    const settings = getAppSettings();
+    const probe = await resolveAndProbeHost(updatedName, explicitIp, settings.defaultGlobalDomain);
+
+    const updated: ADComputer = {
+      ...existing,
+      ...req.body,
+      id: existing.id,
+      name: updatedName,
+      ipAddress: explicitIp || probe.ipAddress,
+      dnsHostName: req.body.dnsHostName || probe.dnsHostName || existing.dnsHostName,
+      status: existing.agentInstalled && probe.reachable
+        ? 'AgentConnected'
+        : (probe.reachable ? 'Online' : 'Offline'),
+      pingMs: probe.latencyMs,
+    };
+
+    saveADComputer(updated);
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to update workstation' });
+  }
 });
 
 app.delete('/api/ad-computers/:id', (req, res) => {
@@ -1191,7 +1665,7 @@ app.get('/api/setup/status', (req, res) => {
   });
 });
 
-app.post('/api/setup/initialize', (req, res) => {
+app.post('/api/setup/initialize', async (req, res) => {
   try {
     const {
       adminUser,
@@ -1199,10 +1673,21 @@ app.post('/api/setup/initialize', (req, res) => {
       companyBrand,
       defaultCustomer,
       initialSyncAD,
+      clearWorkspace,
     } = req.body || {};
 
     if (!adminUser || !adminUser.username) {
       return res.status(400).json({ error: 'Master administrator username is required' });
+    }
+
+    // 0. If clearWorkspace is requested (default true for clean production start), purge demo/existing workspace data
+    if (clearWorkspace !== false) {
+      clearProductionWorkspace({
+        clearCustomers: true,
+        clearComputers: true,
+        clearDeployments: true,
+        clearTasks: true,
+      });
     }
 
     // 1. Create or update and persist Master Administrator Account
@@ -1213,7 +1698,7 @@ app.post('/api/setup/initialize', (req, res) => {
       id: adminId,
       username: cleanUsername,
       displayName: adminUser.displayName || `${cleanUsername} (Master Admin)`,
-      domain: adConfig?.domain || 'CORP',
+      domain: adConfig?.domain || 'LOCAL',
       role: 'Administrator',
       authProvider: 'local',
       avatarInitials: (adminUser.displayName || cleanUsername).slice(0, 2).toUpperCase(),
@@ -1222,21 +1707,37 @@ app.post('/api/setup/initialize', (req, res) => {
     const savedAdmin = saveUser(createdAdminUser);
     activeSessionUser = savedAdmin;
 
+    // Derive clean domain defaults from user input
+    const netbiosDomain = (adConfig?.domain || '').trim().toUpperCase();
+    const baseDn = (adConfig?.baseDn || '').trim();
+    const derivedFqdnFromBaseDn = baseDn
+      ? baseDn
+          .split(',')
+          .map((p: string) => p.trim())
+          .filter((p: string) => /^DC=/i.test(p))
+          .map((p: string) => p.replace(/^DC=/i, ''))
+          .join('.')
+      : '';
+    const globalDomain =
+      companyBrand?.defaultGlobalDomain ||
+      derivedFqdnFromBaseDn ||
+      (netbiosDomain ? `${netbiosDomain.toLowerCase()}.local` : 'local');
+
     // 2. Update Master App Settings
     const updatedSettings = updateAppSettings({
       initialSetupCompleted: true,
       setupCompletedAt: new Date().toISOString(),
-      defaultGlobalDomain: companyBrand?.defaultGlobalDomain || (adConfig?.domain ? `${adConfig.domain.toLowerCase()}.internal.net` : 'corp.internal.net'),
+      defaultGlobalDomain: globalDomain,
       authMode: adConfig?.ldapUrl ? 'active_directory' : 'local',
       adLdapConfig: {
-        ldapUrl: adConfig?.ldapUrl || 'ldaps://dc01.corp.internal.net:636',
-        domain: adConfig?.domain || 'CORP',
-        baseDn: adConfig?.baseDn || 'DC=corp,DC=internal,DC=net',
-        bindDn: adConfig?.bindDn || 'CN=svc_fdim,OU=ServiceAccounts,DC=corp,DC=internal,DC=net',
+        ldapUrl: (adConfig?.ldapUrl || '').trim(),
+        domain: netbiosDomain,
+        baseDn,
+        bindDn: (adConfig?.bindDn || '').trim(),
         bindPassword: adConfig?.bindPassword || '',
         userSearchFilter: '(sAMAccountName={username})',
-        adminGroup: adConfig?.adminGroup || 'FDIM-Admins',
-        computerSearchOu: adConfig?.computerSearchOu || 'OU=Workstations,DC=corp,DC=internal,DC=net',
+        adminGroup: (adConfig?.adminGroup || 'Domain Admins').trim(),
+        computerSearchOu: (adConfig?.computerSearchOu || baseDn).trim(),
       },
       corporateColors: {
         primaryColor: companyBrand?.primaryColor || '#06b6d4',
@@ -1247,84 +1748,59 @@ app.post('/api/setup/initialize', (req, res) => {
       },
     });
 
-    // 3. Create or update primary customer profile if provided
-    if (defaultCustomer && defaultCustomer.companyName) {
-      const allCusts = getAllCustomers();
-      const targetCode = (defaultCustomer.customerCode || defaultCustomer.companyName.slice(0, 4)).toUpperCase();
-      const matchedCust = allCusts.find(
-        (c) =>
-          c.customerCode.toUpperCase() === targetCode ||
-          c.companyName.toLowerCase() === String(defaultCustomer.companyName).trim().toLowerCase()
-      );
-      const custId = matchedCust ? matchedCust.id : `cust-${Date.now().toString(36)}`;
+    // 3. Only create a primary customer profile if the user explicitly provided a companyName
+    let createdCustomerId = '';
+    if (defaultCustomer && defaultCustomer.companyName && String(defaultCustomer.companyName).trim()) {
+      const companyNameClean = String(defaultCustomer.companyName).trim();
+      const targetCode = (defaultCustomer.customerCode || companyNameClean.slice(0, 4)).trim().toUpperCase();
+      createdCustomerId = `cust-${Date.now().toString(36)}`;
       saveCustomer({
-        id: custId,
-        companyName: defaultCustomer.companyName,
+        id: createdCustomerId,
+        companyName: companyNameClean,
         customerCode: targetCode,
-        domainName: adConfig?.domain || defaultCustomer.domain || 'CORP',
-        defaultAdAdminGroup: adConfig?.adminGroup || 'FDIM-Admins',
-        uncShareRoot: defaultCustomer.uncShareRoot || `\\\\${adConfig?.domain?.toLowerCase() || 'corp'}-fs01.internal.net\\deployments`,
+        domainName: globalDomain,
+        defaultAdAdminGroup: adConfig?.adminGroup || 'Domain Admins',
+        uncShareRoot: (defaultCustomer.uncShareRoot || '').trim(),
         enableRdp: true,
-        packageIds: matchedCust?.packageIds || ['pkg-chrome', 'pkg-7zip', 'pkg-vlc', 'pkg-notepadplusplus'],
-        notes: 'Primary organization profile configured during initial instance setup.',
+        powerPlanSettings: {
+          screenTimeoutAc: 15,
+          standbyTimeoutAc: 0,
+        },
+        packageIds: [],
+        notes: 'Primary organization profile created during initial setup.',
       });
     }
 
-    // 4. Initial Active Directory LDAP Sync (if requested)
+    // 4. Real Active Directory LDAP Sync (if requested and LDAP URL provided)
     let discoveredCount = 0;
-    if (initialSyncAD) {
-      const existing = getAllADComputers();
-      const domain = adConfig?.domain || 'CORP';
-      const ou = adConfig?.computerSearchOu || 'OU=Workstations,DC=corp,DC=internal,DC=net';
-      const newComps: ADComputer[] = [
-        {
-          id: `comp-ad-${Date.now().toString(36)}-1`,
-          name: `WS-${domain}-001`,
-          dnsHostName: `ws-${domain.toLowerCase()}-001.${domain.toLowerCase()}.internal.net`,
-          operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
-          ouPath: ou,
-          ipAddress: '192.168.10.101',
-          status: 'Online',
-          pingMs: 3,
-          lastSeen: new Date().toISOString(),
-          agentInstalled: false,
-          installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
-          customerProfileId: getAllCustomers()[0]?.id || 'cust-acme',
-          description: 'Primary domain workstation discovered during initial setup wizard LDAP scan',
-          uptimeHours: 12,
-        },
-        {
-          id: `comp-ad-${Date.now().toString(36)}-2`,
-          name: `LAPTOP-${domain}-002`,
-          dnsHostName: `laptop-${domain.toLowerCase()}-002.${domain.toLowerCase()}.internal.net`,
-          operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
-          ouPath: ou,
-          ipAddress: '192.168.10.102',
-          status: 'Online',
-          pingMs: 5,
-          lastSeen: new Date().toISOString(),
-          agentInstalled: false,
-          installedPackageIds: ['pkg-chrome'],
-          customerProfileId: getAllCustomers()[0]?.id || 'cust-acme',
-          description: 'Mobile domain client discovered during initial setup wizard LDAP scan',
-          uptimeHours: 6,
-        },
-      ];
-
-      for (const c of newComps) {
-        if (!existing.some((e) => e.name.toLowerCase() === c.name.toLowerCase())) {
-          saveADComputer(c);
-          discoveredCount++;
-        }
+    let ldapSyncWarning: string | undefined;
+    if (initialSyncAD && adConfig?.ldapUrl && String(adConfig.ldapUrl).trim()) {
+      const syncResult = await queryActiveDirectoryComputers({
+        ldapUrl: adConfig.ldapUrl,
+        domain: netbiosDomain || globalDomain,
+        baseDn: baseDn,
+        bindDn: adConfig.bindDn,
+        bindPassword: adConfig.bindPassword,
+        searchOu: adConfig.computerSearchOu || baseDn,
+        customerProfileId: createdCustomerId,
+        defaultGlobalDomain: globalDomain,
+      });
+      if (syncResult.success) {
+        discoveredCount = syncResult.discovered.length;
+      } else {
+        ldapSyncWarning = syncResult.error;
       }
     }
 
     res.json({
       success: true,
-      message: 'FDIM Suite initial setup completed successfully! Master administrator created and Active Directory connected.',
+      message: ldapSyncWarning
+        ? `Setup completed! Note: Initial LDAP sync could not reach the Domain Controller (${ldapSyncWarning}).`
+        : 'FDIM Suite initial setup completed! Production workspace is ready.',
       user: activeSessionUser,
       appSettings: updatedSettings,
       discoveredComputersCount: discoveredCount,
+      ldapSyncWarning,
     });
   } catch (err: any) {
     console.error('Error in /api/setup/initialize:', err);
@@ -1336,6 +1812,9 @@ app.post('/api/setup/initialize', (req, res) => {
 });
 
 app.post('/api/setup/reset', (req, res) => {
+  if (req.body?.clearWorkspace) {
+    clearProductionWorkspace();
+  }
   const updatedSettings = updateAppSettings({
     initialSetupCompleted: false,
     setupCompletedAt: undefined,
@@ -1347,195 +1826,353 @@ app.post('/api/setup/reset', (req, res) => {
   });
 });
 
+app.post('/api/database/purge-workspace', (req, res) => {
+  clearProductionWorkspace({
+    clearCustomers: req.body?.clearCustomers !== false,
+    clearComputers: req.body?.clearComputers !== false,
+    clearDeployments: req.body?.clearDeployments !== false,
+    clearTasks: req.body?.clearTasks !== false,
+  });
+  res.json({
+    success: true,
+    message: 'Production workspace cleared (all computers, customer profiles, deployment history, and queued tasks removed).',
+  });
+});
+
 // -------------------------------------------------------------
-// AD COMPUTER LDAP SYNC & DISCOVERY ENGINE
+// AD COMPUTER LDAP SYNC, DISCOVERY & AGENT DEPLOYMENT ENGINE
 // -------------------------------------------------------------
 
-app.post('/api/ad-computers/sync', (req, res) => {
-  const settings = getAppSettings();
-  const domain = req.body.domain || settings.adLdapConfig?.domain || 'CORP';
-  const ouPath = req.body.ouPath || settings.adLdapConfig?.computerSearchOu || `OU=Workstations,DC=${domain.toLowerCase()},DC=internal,DC=net`;
-  const specificNames: string[] = Array.isArray(req.body.specificComputerNames) ? req.body.specificComputerNames : [];
-  const customerId = req.body.customerProfileId || (getAllCustomers()[0]?.id || 'cust-acme');
-  const existing = getAllADComputers();
+app.post('/api/ad-computers/sync', async (req, res) => {
+  try {
+    const settings = getAppSettings();
+    const ldapUrl = req.body.ldapUrl || settings.adLdapConfig?.ldapUrl || '';
+    const domain = req.body.domain || settings.adLdapConfig?.domain || '';
+    const baseDn = req.body.baseDn || settings.adLdapConfig?.baseDn || '';
+    const bindDn = req.body.bindDn || settings.adLdapConfig?.bindDn || '';
+    const bindPassword = req.body.bindPassword ?? settings.adLdapConfig?.bindPassword ?? '';
+    const ouPath = req.body.ouPath || settings.adLdapConfig?.computerSearchOu || baseDn;
+    const specificNames: string[] = Array.isArray(req.body.specificComputerNames) ? req.body.specificComputerNames : [];
+    const customerId = req.body.customerProfileId || (getAllCustomers()[0]?.id || '');
 
-  // Simulate refreshing online status & timestamps of existing endpoints
-  const now = new Date();
-  let updatedCount = 0;
-  for (const c of existing) {
-    if (c.status === 'AgentConnected' || Math.random() > 0.3) {
-      c.lastSeen = now.toISOString();
-      if (c.status === 'Offline' && Math.random() > 0.4) {
-        c.status = 'Online';
-        c.pingMs = Math.floor(Math.random() * 8) + 2;
-      }
-      saveADComputer(c);
-      updatedCount++;
+    const syncResult = await queryActiveDirectoryComputers({
+      ldapUrl,
+      domain,
+      baseDn,
+      bindDn,
+      bindPassword,
+      searchOu: ouPath,
+      specificNames,
+      customerProfileId: customerId,
+      defaultGlobalDomain: settings.defaultGlobalDomain,
+    });
+
+    if (!syncResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: syncResult.error,
+        message: syncResult.error,
+        totalComputers: getAllADComputers().length,
+        discoveredCount: 0,
+        discoveredComputers: [],
+        updatedCount: 0,
+      });
     }
+
+    const allCompsNow = getAllADComputers();
+    const discoveredNames = syncResult.discovered.map((c) => c.name).join(', ');
+    const message =
+      syncResult.discovered.length > 0
+        ? `LDAP Sync succeeded: Discovered ${syncResult.discovered.length} new computer(s) (${discoveredNames}) in [${syncResult.searchedBase}]. Updated ${syncResult.updated.length} existing computer(s).`
+        : `LDAP Sync completed against [${syncResult.searchedBase}]: Found ${syncResult.totalFoundInAd} computer object(s) in Active Directory (${syncResult.updated.length} updated, 0 new).`;
+
+    res.json({
+      success: true,
+      message,
+      totalComputers: allCompsNow.length,
+      discoveredCount: syncResult.discovered.length,
+      discoveredComputers: syncResult.discovered,
+      updatedCount: syncResult.updated.length,
+      domain,
+      ouPath: syncResult.searchedBase,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Unexpected error during Active Directory LDAP synchronization',
+    });
   }
+});
 
-  const newlyDiscovered: ADComputer[] = [];
+app.post('/api/ad-computers/ping', async (req, res) => {
+  try {
+    const { machineNames } = req.body;
+    if (!Array.isArray(machineNames) || machineNames.length === 0) {
+      return res.status(400).json({ error: 'machineNames array is required' });
+    }
 
-  // 1. If specific computer names provided, add any that don't exist yet
-  if (specificNames.length > 0) {
-    for (const rawName of specificNames) {
-      const cleanName = rawName.trim().toUpperCase();
-      if (cleanName && !existing.some((e) => e.name.toLowerCase() === cleanName.toLowerCase())) {
-        const comp: ADComputer = {
-          id: `comp-ad-${Date.now().toString(36)}-${Math.floor(Math.random() * 999)}`,
-          name: cleanName,
-          dnsHostName: `${cleanName.toLowerCase()}.${domain.toLowerCase()}.${settings.defaultGlobalDomain || 'corp.internal.net'}`,
-          operatingSystem: 'Windows 11 Pro 23H2 (Build 22631)',
-          ouPath,
-          ipAddress: `192.168.10.${Math.floor(Math.random() * 150 + 50)}`,
-          status: 'Online',
-          pingMs: Math.floor(Math.random() * 6) + 2,
-          lastSeen: now.toISOString(),
-          agentInstalled: false,
-          installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
-          customerProfileId: customerId,
-          description: `Discovered via Active Directory LDAP query (${ouPath})`,
-          uptimeHours: Math.floor(Math.random() * 16) + 2,
-        };
+    const settings = getAppSettings();
+    const results: Record<string, { reachable: boolean; latencyMs?: number; status: string; ipAddress?: string }> = {};
+    const allComputers = getAllADComputers();
+
+    for (const name of machineNames) {
+      const comp = allComputers.find((c) => c.name.toLowerCase() === name.toLowerCase());
+      const explicitIp = comp && comp.ipAddress && comp.ipAddress !== 'Unresolved' ? comp.ipAddress : undefined;
+      const probe = await resolveAndProbeHost(name, explicitIp, settings.defaultGlobalDomain);
+
+      const newStatus = probe.reachable
+        ? comp?.agentInstalled
+          ? 'AgentConnected'
+          : 'Online'
+        : 'Offline';
+
+      results[name] = {
+        reachable: probe.reachable,
+        latencyMs: probe.latencyMs,
+        status: newStatus,
+        ipAddress: probe.ipAddress,
+      };
+
+      if (comp) {
+        comp.status = newStatus;
+        comp.pingMs = probe.latencyMs;
+        if (probe.ipAddress !== 'Unresolved') {
+          comp.ipAddress = probe.ipAddress;
+        }
+        if (probe.reachable) {
+          comp.lastSeen = new Date().toISOString();
+        }
         saveADComputer(comp);
-        newlyDiscovered.push(comp);
       }
     }
+
+    res.json({ success: true, results });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Error probing workstation reachability' });
   }
-
-  // 2. Discover 1 to 2 realistic newly domain-joined machines in the target OU
-  const shouldAutoDiscover = req.body.discoverNew !== false;
-  if (shouldAutoDiscover && newlyDiscovered.length === 0) {
-    const departments = ['FIN', 'ENG', 'HR', 'SALES', 'OPS', 'EXEC', 'DEV', 'DESK'];
-    const countToDiscover = req.body.count ? Math.min(5, Math.max(1, req.body.count)) : (Math.floor(Math.random() * 2) + 1);
-
-    for (let i = 0; i < countToDiscover; i++) {
-      const dept = departments[Math.floor(Math.random() * departments.length)];
-      const num = Math.floor(Math.random() * 88 + 10);
-      const isLaptop = Math.random() > 0.5;
-      const compName = `${isLaptop ? 'LAPTOP' : 'WS'}-${dept}-${num}`;
-
-      // Ensure uniqueness
-      const currentAll = getAllADComputers();
-      if (!currentAll.some((c) => c.name.toLowerCase() === compName.toLowerCase())) {
-        const newComp: ADComputer = {
-          id: `comp-ad-${Date.now().toString(36)}-${i}`,
-          name: compName,
-          dnsHostName: `${compName.toLowerCase()}.${domain.toLowerCase()}.${settings.defaultGlobalDomain || 'corp.internal.net'}`,
-          operatingSystem: isLaptop ? 'Windows 11 Pro 23H2' : 'Windows 11 Enterprise 23H2',
-          ouPath,
-          ipAddress: `192.168.10.${Math.floor(Math.random() * 150 + 50)}`,
-          status: 'Online',
-          pingMs: Math.floor(Math.random() * 6) + 2,
-          lastSeen: now.toISOString(),
-          agentInstalled: false,
-          installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
-          customerProfileId: customerId,
-          description: `Newly domain-joined computer discovered via LDAP sync in ${ouPath}`,
-          uptimeHours: Math.floor(Math.random() * 12) + 1,
-        };
-        saveADComputer(newComp);
-        newlyDiscovered.push(newComp);
-      }
-    }
-  }
-
-  const allCompsNow = getAllADComputers();
-  const discoveredNames = newlyDiscovered.map((c) => c.name).join(', ');
-  const message = newlyDiscovered.length > 0
-    ? `Active Directory LDAP sync completed successfully: Discovered ${newlyDiscovered.length} new computer(s) (${discoveredNames}) in [${ouPath}]. Updated ${updatedCount} existing workstations.`
-    : `Active Directory LDAP sync completed. Synced directory tree for domain [${domain}]. Verified ${updatedCount} workstations in inventory.`;
-
-  res.json({
-    success: true,
-    message,
-    totalComputers: allCompsNow.length,
-    discoveredCount: newlyDiscovered.length,
-    discoveredComputers: newlyDiscovered,
-    updatedCount,
-    domain,
-    ouPath,
-    timestamp: now.toISOString(),
-  });
 });
 
-app.post('/api/ad-computers/ping', (req, res) => {
-  const { machineNames } = req.body;
-  if (!Array.isArray(machineNames) || machineNames.length === 0) {
-    return res.status(400).json({ error: 'machineNames array is required' });
-  }
+app.post('/api/ad-computers/bulk-import', async (req, res) => {
+  try {
+    const { computerNames, computers, domain, ouPath, customerProfileId } = req.body;
+    const settings = getAppSettings();
+    const targetDomain = domain || settings.defaultGlobalDomain || '';
+    const targetOu = ouPath || settings.adLdapConfig?.computerSearchOu || settings.adLdapConfig?.baseDn || 'CN=Computers';
+    const targetCustomer = customerProfileId ?? (getAllCustomers()[0]?.id || '');
 
-  const results: Record<string, { reachable: boolean; latencyMs?: number; status: string }> = {};
-  const allComputers = getAllADComputers();
+    const imported: ADComputer[] = [];
+    const updated: ADComputer[] = [];
+    const existing = getAllADComputers();
 
-  for (const name of machineNames) {
-    const comp = allComputers.find((c) => c.name.toLowerCase() === name.toLowerCase());
-    const isOnline = comp ? comp.status !== 'Offline' : Math.random() > 0.25;
-    const latency = isOnline ? (comp?.pingMs || Math.floor(Math.random() * 10) + 2) : undefined;
-    results[name] = {
-      reachable: isOnline,
-      latencyMs: latency,
-      status: isOnline ? (comp?.agentInstalled ? 'AgentConnected' : 'Online') : 'Offline',
-    };
+    // Support structured objects array (e.g. from PowerShell AD Sync Bridge) OR string lines ("HOSTNAME" or "HOSTNAME, IP, OS, OU")
+    const entriesToProcess: Array<{
+      name: string;
+      ipAddress?: string;
+      dnsHostName?: string;
+      operatingSystem?: string;
+      ouPath?: string;
+      description?: string;
+    }> = [];
 
-    if (comp) {
-      comp.status = isOnline ? (comp.agentInstalled ? 'AgentConnected' : 'Online') : 'Offline';
-      if (isOnline) {
-        comp.pingMs = latency;
-        comp.lastSeen = new Date().toISOString();
+    if (Array.isArray(computers)) {
+      for (const item of computers) {
+        if (item && item.name) {
+          entriesToProcess.push({
+            name: String(item.name).trim().toUpperCase(),
+            ipAddress: item.ipAddress ? String(item.ipAddress).trim() : undefined,
+            dnsHostName: item.dnsHostName ? String(item.dnsHostName).trim() : undefined,
+            operatingSystem: item.operatingSystem ? String(item.operatingSystem).trim() : undefined,
+            ouPath: item.ouPath ? String(item.ouPath).trim() : undefined,
+            description: item.description ? String(item.description).trim() : undefined,
+          });
+        }
       }
-      saveADComputer(comp);
+    } else if (Array.isArray(computerNames)) {
+      for (const rawLine of computerNames) {
+        const parts = String(rawLine)
+          .split(/[;,\t]/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (parts.length === 0) continue;
+        const cleanName = parts[0].toUpperCase();
+        const optionalIp = parts[1] && (net.isIP(parts[1]) || /^\d+\.\d+\.\d+\.\d+$/.test(parts[1])) ? parts[1] : undefined;
+        const optionalOs = optionalIp ? parts[2] : parts[1];
+        const optionalOu = optionalIp ? parts[3] : parts[2];
+        entriesToProcess.push({
+          name: cleanName,
+          ipAddress: optionalIp,
+          operatingSystem: optionalOs,
+          ouPath: optionalOu,
+        });
+      }
     }
-  }
 
-  res.json({ success: true, results });
+    if (entriesToProcess.length === 0) {
+      return res.status(400).json({ error: 'No valid computer hostnames provided' });
+    }
+
+    for (const item of entriesToProcess) {
+      if (!item.name) continue;
+      const probe = await resolveAndProbeHost(item.name, item.ipAddress, targetDomain);
+      const found = existing.find((c) => c.name.toLowerCase() === item.name.toLowerCase());
+
+      if (found) {
+        if (item.ipAddress || probe.ipAddress !== 'Unresolved') {
+          found.ipAddress = item.ipAddress || probe.ipAddress;
+        }
+        if (item.dnsHostName) found.dnsHostName = item.dnsHostName;
+        if (item.operatingSystem) found.operatingSystem = item.operatingSystem;
+        if (item.ouPath) found.ouPath = item.ouPath;
+        if (item.description) found.description = item.description;
+        if (targetCustomer) found.customerProfileId = targetCustomer;
+        found.status = found.agentInstalled && probe.reachable ? 'AgentConnected' : (probe.reachable ? 'Online' : 'Offline');
+        found.pingMs = probe.latencyMs;
+        saveADComputer(found);
+        updated.push(found);
+        continue;
+      }
+
+      const newComp: ADComputer = {
+        id: `comp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        name: item.name,
+        dnsHostName: item.dnsHostName || probe.dnsHostName,
+        operatingSystem: item.operatingSystem || 'Windows 11 Pro',
+        ouPath: item.ouPath || targetOu,
+        ipAddress: item.ipAddress || probe.ipAddress,
+        status: probe.reachable ? 'Online' : 'Offline',
+        pingMs: probe.latencyMs,
+        lastSeen: new Date().toISOString(),
+        agentInstalled: false,
+        installedPackageIds: [],
+        customerProfileId: targetCustomer,
+        description: item.description || 'Added to workstation inventory',
+        uptimeHours: 0,
+      };
+      saveADComputer(newComp);
+      imported.push(newComp);
+    }
+
+    res.json({
+      success: true,
+      importedCount: imported.length,
+      updatedCount: updated.length,
+      computers: [...imported, ...updated],
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Error importing workstations' });
+  }
 });
 
-app.post('/api/ad-computers/bulk-import', (req, res) => {
-  const { computerNames, domain, ouPath, customerProfileId } = req.body;
-  if (!Array.isArray(computerNames) || computerNames.length === 0) {
-    return res.status(400).json({ error: 'computerNames array is required' });
+// Deploy FDIM Client Agent to one or more AD Computers
+app.post('/api/ad-computers/deploy-agent', async (req, res) => {
+  try {
+    const { machineNames, serverUrl, adminUsername, transport } = req.body;
+    if (!Array.isArray(machineNames) || machineNames.length === 0) {
+      return res.status(400).json({ error: 'machineNames array is required' });
+    }
+
+    const settings = getAppSettings();
+    const effectiveServerUrl = (serverUrl || settings.agentConfig?.serverUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+    const allComputers = getAllADComputers();
+    const results: Array<{
+      machineName: string;
+      ipAddress: string;
+      reachable: boolean;
+      winrmOpen: boolean;
+      smbOpen: boolean;
+      status: 'queued_and_ready' | 'unreachable_queued';
+      message: string;
+    }> = [];
+
+    for (const rawName of machineNames) {
+      const comp = allComputers.find((c) => c.name.toLowerCase() === String(rawName).toLowerCase());
+      const explicitIp = comp && comp.ipAddress && comp.ipAddress !== 'Unresolved' ? comp.ipAddress : undefined;
+      const probe = await resolveAndProbeHost(rawName, explicitIp, settings.defaultGlobalDomain);
+
+      const winrmOpen = probe.openPorts.includes(5985) || probe.openPorts.includes(5986);
+      const smbOpen = probe.openPorts.includes(445);
+
+      // Queue an Agent Bootstrap task for tracking
+      const existingTasks = getQueuedTasksForMachine(rawName);
+      if (!existingTasks.some((t) => t.title.includes('Deploy FDIM Client Agent'))) {
+        saveQueuedTask({
+          id: `task-agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+          machineName: String(rawName).toUpperCase(),
+          taskType: 'CustomScript',
+          title: 'Deploy FDIM Client Agent (Scheduled Task Bootstrap)',
+          status: 'queued',
+          payload: {
+            customScript: `Invoke-RestMethod -Uri "${effectiveServerUrl}/api/agent/script/installer?serverUrl=${encodeURIComponent(effectiveServerUrl)}" | Invoke-Expression`,
+          },
+          executionMode: 'service_account',
+          serviceAccount: adminUsername || settings.runnerServiceAccount?.username || 'Administrator',
+          createdAt: new Date().toISOString(),
+          createdBy: activeSessionUser.displayName,
+          retryCount: 0,
+          maxRetries: 3,
+        });
+      }
+
+      if (comp) {
+        if (probe.ipAddress !== 'Unresolved') comp.ipAddress = probe.ipAddress;
+        comp.status = probe.reachable ? (comp.agentInstalled ? 'AgentConnected' : 'Online') : 'Offline';
+        comp.pingMs = probe.latencyMs;
+        saveADComputer(comp);
+      }
+
+      results.push({
+        machineName: String(rawName).toUpperCase(),
+        ipAddress: probe.ipAddress,
+        reachable: probe.reachable,
+        winrmOpen,
+        smbOpen,
+        status: probe.reachable ? 'queued_and_ready' : 'unreachable_queued',
+        message: probe.reachable
+          ? `Host ${rawName} (${probe.ipAddress}) is online (${probe.latencyMs}ms). ${
+              winrmOpen ? 'WinRM port open.' : smbOpen ? 'SMB port 445 open.' : 'Run the PowerShell push command from a domain management host to complete installation.'
+            }`
+          : `Host ${rawName} (${probe.ipAddress}) is not directly reachable from this server container. Queued deployment task & generated PowerShell remote push script.`,
+      });
+    }
+
+    const targetsList = machineNames.map((n: string) => `"${String(n).trim()}"`).join(', ');
+    const credUser = adminUsername || settings.runnerServiceAccount?.username || `${settings.adLdapConfig?.domain || 'DOMAIN'}\\Administrator`;
+    const useSslFlag = transport === 'winrm_https' ? ' -UseSSL' : '';
+
+    const remotePushScript = `# ==============================================================================
+# FDIM Client Agent Remote Push Script (WinRM / PowerShell Remoting)
+# Targets: ${machineNames.join(', ')}
+# Server:  ${effectiveServerUrl}
+# ==============================================================================
+$Targets = @(${targetsList})
+$ServerUrl = "${effectiveServerUrl}"
+$Cred = Get-Credential -UserName "${credUser}" -Message "Enter Domain Admin credentials for remote Agent deployment"
+
+foreach ($Computer in $Targets) {
+    Write-Host "[*] Deploying FDIM Client Agent to $Computer..." -ForegroundColor Cyan
+    try {
+        Invoke-Command -ComputerName $Computer -Credential $Cred${useSslFlag} -ScriptBlock {
+            param($Url)
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $installer = Invoke-RestMethod -Uri "$Url/api/agent/script/installer?serverUrl=$([uri]::EscapeDataString($Url))" -UseBasicParsing
+            Invoke-Expression $installer
+        } -ArgumentList $ServerUrl -ErrorAction Stop
+        Write-Host "[OK] FDIM Agent installed and heartbeat triggered on $Computer!" -ForegroundColor Green
+    } catch {
+        Write-Warning "[!] Failed on $Computer: $_"
+    }
+}`;
+
+    res.json({
+      success: true,
+      serverUrl: effectiveServerUrl,
+      results,
+      remotePushScript,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to prepare agent deployment' });
   }
-
-  const settings = getAppSettings();
-  const targetDomain = domain || settings.defaultGlobalDomain || 'corp.internal.net';
-  const targetOu = ouPath || 'OU=Workstations,DC=corp,DC=internal,DC=net';
-  const targetCustomer = customerProfileId || 'cust-acme';
-
-  const imported: ADComputer[] = [];
-  const existing = getAllADComputers();
-
-  for (const rawName of computerNames) {
-    const cleanName = rawName.trim().toUpperCase();
-    if (!cleanName) continue;
-    const found = existing.find((c) => c.name.toLowerCase() === cleanName.toLowerCase());
-    if (found) continue;
-
-    const newComp: ADComputer = {
-      id: `comp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-      name: cleanName,
-      dnsHostName: `${cleanName.toLowerCase()}.${targetDomain}`,
-      operatingSystem: 'Windows 11 Pro 23H2',
-      ouPath: targetOu,
-      ipAddress: `192.168.10.${Math.floor(Math.random() * 180 + 20)}`,
-      status: 'Online',
-      pingMs: 5,
-      lastSeen: new Date().toISOString(),
-      agentInstalled: false,
-      installedPackageIds: [],
-      customerProfileId: targetCustomer,
-      description: 'Imported into FDIM Suite',
-      uptimeHours: 12,
-    };
-    saveADComputer(newComp);
-    imported.push(newComp);
-  }
-
-  res.json({
-    success: true,
-    importedCount: imported.length,
-    computers: imported,
-  });
 });
 
 app.get('/api/computers/:name/history', (req, res) => {
@@ -1552,7 +2189,7 @@ app.get('/api/computers/:name/history', (req, res) => {
 // CLIENT AGENT & WAIT-TASKS QUEUE API
 // -------------------------------------------------------------
 
-app.get('/api/agent/tasks', (req, res) => {
+app.get(['/api/agent/tasks', '/api/queued-tasks'], (req, res) => {
   const { machine, status } = req.query;
   let tasks = getAllQueuedTasks();
   if (typeof machine === 'string' && machine) {
@@ -1564,29 +2201,42 @@ app.get('/api/agent/tasks', (req, res) => {
   res.json(tasks);
 });
 
-app.post('/api/agent/tasks', (req, res) => {
+app.post(['/api/agent/tasks', '/api/queued-tasks'], (req, res) => {
   const {
     machineName,
     taskType,
     title,
     payload,
+    packageIds,
+    packageNames,
+    customerProfileId,
     executionMode,
     serviceAccount,
     createdBy,
+    notes,
   } = req.body;
 
-  if (!machineName || !title) {
-    return res.status(400).json({ error: 'machineName and title are required' });
+  if (!machineName) {
+    return res.status(400).json({ error: 'machineName is required' });
   }
+
+  const computedTitle =
+    title ||
+    (Array.isArray(packageNames) && packageNames.length > 0
+      ? `Install: ${packageNames.join(', ')}`
+      : notes || `${taskType || 'SoftwareInstall'} on ${machineName}`);
 
   const settings = getAppSettings();
   const newTask: QueuedTask = {
-    id: `task-q-${Date.now().toString(36)}`,
+    id: `task-q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
     machineName: machineName.toUpperCase().trim(),
-    taskType: taskType || 'SoftwareInstall',
-    title,
+    taskType: taskType === 'SoftwareDeploy' ? 'SoftwareInstall' : taskType || 'SoftwareInstall',
+    title: computedTitle,
     status: 'queued',
-    payload: payload || {},
+    payload: payload || {
+      packageIds: Array.isArray(packageIds) ? packageIds : [],
+      customerProfileId: customerProfileId || '',
+    },
     executionMode: executionMode || (settings.runnerServiceAccount.enabled ? 'service_account' : 'agent_system'),
     serviceAccount: serviceAccount || settings.runnerServiceAccount.username,
     createdAt: new Date().toISOString(),
@@ -1686,14 +2336,22 @@ app.post('/api/agent/heartbeat', (req, res) => {
     comp.lastSeen = now;
     comp.lastHeartbeat = now;
     comp.agentInstalled = true;
+    comp.agentStatus = 'Installed';
+    comp.lastAgentHeartbeat = now;
     if (agentVersion) comp.agentVersion = agentVersion;
     if (ip) comp.ipAddress = ip;
-    if (os) comp.operatingSystem = os;
-    if (currentUser) comp.currentUser = currentUser;
+    if (os) {
+      comp.operatingSystem = os;
+      comp.osName = os;
+    }
+    if (currentUser) {
+      comp.currentUser = currentUser;
+      comp.loggedInUser = currentUser;
+    }
     if (typeof uptimeHours === 'number') comp.uptimeHours = uptimeHours;
     if (Array.isArray(installedPackages) && installedPackages.length > 0) {
       // Merge unique package IDs
-      const set = new Set([...comp.installedPackageIds, ...installedPackages]);
+      const set = new Set([...(comp.installedPackageIds || []), ...installedPackages]);
       comp.installedPackageIds = Array.from(set);
     }
     saveADComputer(comp);
@@ -1702,20 +2360,27 @@ app.post('/api/agent/heartbeat', (req, res) => {
     const newComp: ADComputer = {
       id: `comp-${Date.now().toString(36)}`,
       name: cleanName,
-      dnsHostName: `${cleanName.toLowerCase()}.${domain || 'corp.internal.net'}`,
+      fqdn: `${cleanName.toLowerCase()}.${domain || 'corp.local'}`,
+      dnsHostName: `${cleanName.toLowerCase()}.${domain || 'corp.local'}`,
+      domain: domain || 'corp.local',
+      osName: os || 'Windows 11 Pro',
+      osBuild: '22631',
       operatingSystem: os || 'Windows 11 Pro',
-      ouPath: 'OU=Discovered,OU=Workstations,DC=corp,DC=internal,DC=net',
-      ipAddress: ip || req.ip || '192.168.10.50',
-      status: 'AgentConnected',
+      ouPath: 'OU=Workstations',
+      ipAddress: ip || req.ip || 'Unresolved (DNS)',
+      status: 'Online',
       pingMs: 2,
       lastSeen: now,
       lastHeartbeat: now,
+      lastAgentHeartbeat: now,
       agentInstalled: true,
-      agentVersion: agentVersion || '1.4.0',
+      agentStatus: 'Installed',
+      agentVersion: agentVersion || '2.4.1',
       installedPackageIds: Array.isArray(installedPackages) ? installedPackages : [],
-      customerProfileId: 'cust-acme',
+      customerProfileId: '',
       description: 'Auto-registered via client heartbeat task',
       currentUser,
+      loggedInUser: currentUser || null,
       uptimeHours: uptimeHours || 1,
     };
     saveADComputer(newComp);
@@ -1769,7 +2434,7 @@ app.post('/api/agent/tasks/:id/report', (req, res) => {
     if (comp) {
       const pkgIdsToAdd = task.payload.packageIds || installedPackageIds || [];
       if (pkgIdsToAdd.length > 0) {
-        const merged = Array.from(new Set([...comp.installedPackageIds, ...pkgIdsToAdd]));
+        const merged = Array.from(new Set([...(comp.installedPackageIds || []), ...pkgIdsToAdd]));
         comp.installedPackageIds = merged;
         saveADComputer(comp);
       }
@@ -2162,19 +2827,36 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ success: true, user: activeSessionUser });
 });
 
-app.post('/api/auth/test-ad', (req, res) => {
-  const { ldapUrl, domain, baseDn, bindDn } = req.body;
-  // Connection diagnostic
+app.post('/api/auth/test-ad', async (req, res) => {
+  const { ldapUrl, domain, baseDn, bindDn, bindPassword } = req.body;
   if (!ldapUrl) {
     return res.status(400).json({ error: 'LDAP URL is required' });
   }
 
+  const result = await testActiveDirectoryConnection({
+    ldapUrl,
+    domain,
+    baseDn,
+    bindDn,
+    bindPassword,
+  });
+
+  if (!result.success) {
+    return res.status(400).json({
+      success: false,
+      error: result.error,
+      message: result.message,
+      dcHost: result.dcHost,
+    });
+  }
+
   res.json({
     success: true,
-    message: `Successfully connected to Domain Controller at ${ldapUrl}. Active Directory Domain [${domain || 'CORP'}] is responding.`,
-    dcHost: ldapUrl.replace(/^ldaps?:\/\//, '').split(':')[0],
+    message: result.message,
+    dcHost: result.dcHost,
+    computerCount: result.computerCount,
     bindDnValid: !!bindDn,
-    baseDn: baseDn || 'DC=corp,DC=internal,DC=net',
+    baseDn: baseDn || '',
     timestamp: new Date().toISOString(),
   });
 });

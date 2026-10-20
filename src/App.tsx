@@ -29,7 +29,7 @@ import { LoginModal } from './components/LoginModal';
 import { SetupWizardModal } from './components/SetupWizardModal';
 import { ADComputersView } from './components/ADComputersView';
 import { ClientAgentQueueView } from './components/ClientAgentQueueView';
-import { loadWizardDraft } from './utils/wizardAutoSave';
+import { loadWizardDraft, clearWizardDraft } from './utils/wizardAutoSave';
 import { loadUserProfanityPreference, saveUserProfanityPreference } from './utils/branding';
 import { applyCorporateTheme, loadSavedCorporateColors } from './utils/theme';
 
@@ -104,10 +104,10 @@ export default function App() {
 
   // Machine state (persisted via local storage draft)
   const initialDraft = loadWizardDraft();
-  const [machineName, setMachineName] = useState(() => initialDraft?.machineName || 'ACME-WS-084');
+  const [machineName, setMachineName] = useState(() => initialDraft?.machineName || 'WS-001');
 
   // Selected customer profile
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string>(() => initialDraft?.selectedCustomerId || 'cust-acme');
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>(() => initialDraft?.selectedCustomerId || '');
   const [selectedPackageIds, setSelectedPackageIds] = useState<string[]>(() => initialDraft?.selectedPackageIds || []);
   const [packageCustomSwitches, setPackageCustomSwitches] = useState<Record<string, string>>(() => initialDraft?.packageCustomSwitches || {});
   const [packageConfigFiles, setPackageConfigFiles] = useState<Record<string, string>>(() => initialDraft?.packageConfigFiles || {});
@@ -638,6 +638,7 @@ export default function App() {
             onOpenScriptModal={() => setIsScriptModalOpen(true)}
             availableSnippets={snippets}
             onOpenSnippetsManager={() => setActiveTab('snippets')}
+            onOpenCustomerProfiles={() => setActiveTab('customers')}
             showProfanity={currentUser.showProfanity !== false}
           />
         )}
@@ -830,20 +831,40 @@ export default function App() {
           sessionStorage.setItem('fdim_setup_skipped', 'true');
           setIsSetupWizardOpen(false);
         }}
-        onSetupCompleted={(newAdmin, newSettings, discoveredCount) => {
+        onSetupCompleted={(newAdmin, newSettings, discoveredCount, ldapSyncWarning, shouldOpenAdTab) => {
+          clearWizardDraft();
           setCurrentUser(newAdmin);
           setAppSettings(newSettings);
           setIsSetupWizardOpen(false);
+          if (shouldOpenAdTab) {
+            setActiveTab('ad-computers');
+          }
+          const adNotice =
+            (newSettings.authMode === 'active_directory' || (newSettings.authMode as string) === 'ad_ldap') && newSettings.adLdapConfig?.domain
+              ? `, Active Directory domain [${newSettings.adLdapConfig.domain}] configured`
+              : '';
+          const syncNotice = discoveredCount
+            ? `, and ${discoveredCount} domain computer(s) discovered via LDAP.`
+            : ldapSyncWarning
+            ? `. Note: ${ldapSyncWarning}`
+            : '.';
           setSetupCompletionNotice(
-            `Initial setup completed! Master administrator [${newAdmin.username}] created, Active Directory domain [${newSettings.adLdapConfig.domain}] connected${
-              discoveredCount ? `, and ${discoveredCount} domain computers discovered.` : '.'
-            }`
+            `Initial setup completed! Master administrator [${newAdmin.username}] ready with a clean production workspace${adNotice}${syncNotice}`
           );
-          // Refresh customer profiles
+          // Refresh customer profiles & deployments after clean production setup
           fetch('/api/profiles')
             .then((r) => r.json())
             .then((custs) => {
-              if (Array.isArray(custs)) setCustomers(custs);
+              if (Array.isArray(custs)) {
+                setCustomers(custs);
+                setSelectedCustomerId(custs[0]?.id || '');
+              }
+            })
+            .catch(() => {});
+          fetch('/api/deployments')
+            .then((r) => r.json())
+            .then((deps) => {
+              if (Array.isArray(deps)) setDeployments(deps);
             })
             .catch(() => {});
         }}

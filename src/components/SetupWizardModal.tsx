@@ -30,7 +30,13 @@ import { getFdimExpansion } from '../utils/branding';
 interface SetupWizardModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSetupCompleted: (user: AuthUser, settings: AppSettings, discoveredCount?: number) => void;
+  onSetupCompleted: (
+    user: AuthUser,
+    settings: AppSettings,
+    discoveredCount?: number,
+    ldapSyncWarning?: string,
+    didRequestSync?: boolean
+  ) => void;
 }
 
 export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
@@ -44,37 +50,58 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
 
   // Step 2: Master Administrator
   const [adminUsername, setAdminUsername] = useState('admin');
-  const [adminDisplayName, setAdminDisplayName] = useState('Domain Administrator');
-  const [adminEmail, setAdminEmail] = useState('admin@corp.internal.net');
-  const [adminPassword, setAdminPassword] = useState('P@ssw0rd!2026Master');
-  const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('P@ssw0rd!2026Master');
+  const [adminDisplayName, setAdminDisplayName] = useState('System Administrator');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Step 3: Active Directory Connection
-  const [adDomain, setAdDomain] = useState('CORP');
-  const [adLdapUrl, setAdLdapUrl] = useState('ldaps://dc01.corp.internal.net:636');
-  const [adBaseDn, setAdBaseDn] = useState('DC=corp,DC=internal,DC=net');
-  const [adBindDn, setAdBindDn] = useState('CN=svc_fdim,OU=ServiceAccounts,DC=corp,DC=internal,DC=net');
-  const [adBindPassword, setAdBindPassword] = useState('SvcAcc0unt!P@ss');
-  const [adAdminGroup, setAdAdminGroup] = useState('FDIM-Admins');
-  const [adComputerSearchOu, setAdComputerSearchOu] = useState('OU=Workstations,DC=corp,DC=internal,DC=net');
+  // Step 3: Active Directory Connection (clean production defaults)
+  const [adDomain, setAdDomain] = useState('');
+  const [adLdapUrl, setAdLdapUrl] = useState('');
+  const [adBaseDn, setAdBaseDn] = useState('');
+  const [adBindDn, setAdBindDn] = useState('');
+  const [adBindPassword, setAdBindPassword] = useState('');
+  const [adAdminGroup, setAdAdminGroup] = useState('Domain Admins');
+  const [adComputerSearchOu, setAdComputerSearchOu] = useState('');
   const [isTestingAd, setIsTestingAd] = useState(false);
   const [adTestResult, setAdTestResult] = useState<{ success: boolean; message: string; dcHost?: string } | null>(null);
 
-  // Step 4: Company Profile & Branding
-  const [companyName, setCompanyName] = useState('Contoso Enterprise');
-  const [customerCode, setCustomerCode] = useState('CONT');
-  const [uncShareRoot, setUncShareRoot] = useState('\\\\corp-fs01.internal.net\\deployments');
+  // Step 4: Company Profile & Branding (optional for empty production workspace)
+  const [companyName, setCompanyName] = useState('');
+  const [customerCode, setCustomerCode] = useState('');
+  const [uncShareRoot, setUncShareRoot] = useState('');
   const [brandName, setBrandName] = useState('FDIM Suite');
   const [selectedColorPreset, setSelectedColorPreset] = useState('Cyber Cyan');
   const [primaryColor, setPrimaryColor] = useState('#06b6d4');
   const [secondaryColor, setSecondaryColor] = useState('#2563eb');
   const [showProfanity, setShowProfanity] = useState(true);
 
-  // Step 5: Directory Sync
-  const [initialSyncAD, setInitialSyncAD] = useState(true);
+  // Step 5: Directory Sync & Clean Production Workspace
+  const [initialSyncAD, setInitialSyncAD] = useState(false);
+  const [clearWorkspace, setClearWorkspace] = useState(true);
 
   if (!isOpen) return null;
+
+  const handleLdapUrlChange = (val: string) => {
+    setAdLdapUrl(val);
+    // Auto-derive Base DN and NetBIOS domain from FQDN in LDAP URL if empty
+    const hostMatch = val.replace(/^ldaps?:\/\//i, '').split(':')[0].split('/')[0];
+    const parts = hostMatch.split('.').filter(Boolean);
+    if (parts.length >= 3 && !/^\d+$/.test(parts[0])) {
+      const domainParts = parts.slice(1);
+      if (!adDomain) {
+        setAdDomain(domainParts[0].toUpperCase());
+      }
+      const suggestedBaseDn = domainParts.map((p) => `DC=${p}`).join(',');
+      if (!adBaseDn) {
+        setAdBaseDn(suggestedBaseDn);
+      }
+      if (!adComputerSearchOu) {
+        setAdComputerSearchOu(suggestedBaseDn);
+      }
+    }
+  };
 
   const handleTestAd = async () => {
     setIsTestingAd(true);
@@ -89,19 +116,21 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
           domain: adDomain,
           baseDn: adBaseDn,
           bindDn: adBindDn,
+          bindPassword: adBindPassword,
         }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setAdTestResult({
           success: true,
-          message: data.message || `Successfully connected to Domain Controller ${data.dcHost || 'dc01'}.`,
+          message: data.message || `Successfully connected to Domain Controller ${data.dcHost || ''}.`,
           dcHost: data.dcHost,
         });
+        setInitialSyncAD(true);
       } else {
         setAdTestResult({
           success: false,
-          message: data.error || 'Failed to reach Domain Controller via LDAP.',
+          message: data.error || data.message || 'Failed to reach Domain Controller via LDAP.',
         });
       }
     } catch {
@@ -138,20 +167,6 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
         setErrorMsg('Passwords do not match.');
         return false;
       }
-    } else if (currentStep === 3) {
-      if (!adLdapUrl.trim()) {
-        setErrorMsg('Domain Controller LDAP(S) URL is required.');
-        return false;
-      }
-      if (!adDomain.trim()) {
-        setErrorMsg('Domain NetBIOS name is required.');
-        return false;
-      }
-    } else if (currentStep === 4) {
-      if (!companyName.trim()) {
-        setErrorMsg('Organization or Company Name is required.');
-        return false;
-      }
     }
     return true;
   };
@@ -175,6 +190,17 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
     setErrorMsg(null);
 
     try {
+      const derivedFqdn = adBaseDn
+        ? adBaseDn
+            .split(',')
+            .map((p) => p.trim())
+            .filter((p) => /^DC=/i.test(p))
+            .map((p) => p.replace(/^DC=/i, ''))
+            .join('.')
+        : adDomain
+        ? `${adDomain.toLowerCase()}.local`
+        : 'local';
+
       const payload = {
         adminUser: {
           username: adminUsername,
@@ -185,27 +211,30 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
           showProfanity,
         },
         adConfig: {
-          ldapUrl: adLdapUrl,
-          domain: adDomain,
-          baseDn: adBaseDn,
-          bindDn: adBindDn,
+          ldapUrl: adLdapUrl.trim(),
+          domain: adDomain.trim(),
+          baseDn: adBaseDn.trim(),
+          bindDn: adBindDn.trim(),
           bindPassword: adBindPassword,
-          adminGroup: adAdminGroup,
-          computerSearchOu: adComputerSearchOu,
+          adminGroup: adAdminGroup.trim() || 'Domain Admins',
+          computerSearchOu: adComputerSearchOu.trim() || adBaseDn.trim(),
         },
         companyBrand: {
           companyBrandName: brandName,
           primaryColor,
           secondaryColor,
-          defaultGlobalDomain: `${adDomain.toLowerCase()}.internal.net`,
+          defaultGlobalDomain: derivedFqdn,
         },
-        defaultCustomer: {
-          companyName,
-          customerCode,
-          domain: adDomain,
-          uncShareRoot,
-        },
-        initialSyncAD,
+        defaultCustomer: companyName.trim()
+          ? {
+              companyName: companyName.trim(),
+              customerCode: customerCode.trim() || companyName.trim().slice(0, 4).toUpperCase(),
+              domain: adDomain.trim() || derivedFqdn,
+              uncShareRoot: uncShareRoot.trim(),
+            }
+          : null,
+        initialSyncAD: initialSyncAD && Boolean(adLdapUrl.trim()),
+        clearWorkspace,
       };
 
       const res = await fetch('/api/setup/initialize', {
@@ -235,7 +264,13 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
         customCssVarEnabled: true,
       });
 
-      onSetupCompleted(data.user, data.appSettings, data.discoveredComputersCount);
+      onSetupCompleted(
+        data.user,
+        data.appSettings,
+        data.discoveredComputersCount,
+        data.ldapSyncWarning,
+        initialSyncAD && Boolean(adLdapUrl.trim())
+      );
     } catch (err: any) {
       setErrorMsg(err.message || 'Error initializing FDIM Suite configuration.');
     } finally {
@@ -579,25 +614,25 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
                   <input
                     type="text"
                     value={adLdapUrl}
-                    onChange={(e) => setAdLdapUrl(e.target.value)}
-                    placeholder="ldaps://dc01.corp.internal.net:636"
+                    onChange={(e) => handleLdapUrlChange(e.target.value)}
+                    placeholder="e.g. ldap://192.168.1.10:389 or ldaps://dc01.domain.local:636"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
                   />
-                  <p className="text-[10px] text-slate-500 mt-1">Port 636 for secure LDAPS (recommended) or 389 for LDAP.</p>
+                  <p className="text-[10px] text-slate-500 mt-1">Port 636 for LDAPS or 389 for standard LDAP.</p>
                 </div>
 
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    Domain NetBIOS Name <span className="text-red-400">*</span>
+                    Domain NetBIOS Name
                   </label>
                   <input
                     type="text"
                     value={adDomain}
                     onChange={(e) => setAdDomain(e.target.value.toUpperCase())}
-                    placeholder="e.g. CORP or ACME"
+                    placeholder="e.g. CORP or MYCOMPANY"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono uppercase"
                   />
-                  <p className="text-[10px] text-slate-500 mt-1">Short domain identifier (e.g. CORP\user).</p>
+                  <p className="text-[10px] text-slate-500 mt-1">Short domain identifier (e.g. DOMAIN\user).</p>
                 </div>
               </div>
 
@@ -674,41 +709,39 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center space-x-2">
                   <Building2 className="w-4 h-4 text-cyan-400" />
-                  <span>Primary Organization Profile & Corporate Theme</span>
+                  <span>Primary Organization Profile & Corporate Theme (Optional)</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Configure your primary customer or organization profile and set corporate visual styling.
+                  Leave Organization Name blank if you prefer an empty workspace with zero pre-created profiles.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    Primary Organization / Customer Name <span className="text-red-400">*</span>
+                    Organization / Customer Name <span className="text-slate-500">(Optional)</span>
                   </label>
                   <input
                     type="text"
                     value={companyName}
                     onChange={(e) => {
                       setCompanyName(e.target.value);
-                      if (!customerCode || customerCode === 'CONT') {
-                        setCustomerCode(e.target.value.slice(0, 4).toUpperCase());
-                      }
+                      setCustomerCode(e.target.value.slice(0, 4).toUpperCase());
                     }}
-                    placeholder="e.g. Contoso Enterprise"
+                    placeholder="Leave blank for empty workspace, or enter company name"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    Customer Short Code (3-5 letters) <span className="text-red-400">*</span>
+                    Customer Short Code (3-5 letters)
                   </label>
                   <input
                     type="text"
                     value={customerCode}
                     onChange={(e) => setCustomerCode(e.target.value.toUpperCase())}
-                    placeholder="e.g. CONT or ACME"
+                    placeholder="e.g. HQ or CORP"
                     maxLength={6}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono uppercase"
                   />
@@ -717,13 +750,13 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
 
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  UNC Software Deployment Repository Share
+                  UNC Software Deployment Repository Share <span className="text-slate-500">(Optional)</span>
                 </label>
                 <input
                   type="text"
                   value={uncShareRoot}
                   onChange={(e) => setUncShareRoot(e.target.value)}
-                  placeholder="\\corp-fs01.internal.net\deployments"
+                  placeholder="e.g. \\fileserver\deployments"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
                 />
                 <p className="text-[10px] text-slate-500 mt-1">SMB/UNC network path containing application installation packages.</p>
@@ -872,11 +905,11 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[11px]">Profile Name</span>
-                    <span className="text-white font-bold">{companyName}</span>
+                    <span className="text-white font-bold">{companyName.trim() || 'None (Empty Workspace)'}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[11px]">Customer Code</span>
-                    <span className="text-purple-300 font-mono font-bold">{customerCode}</span>
+                    <span className="text-purple-300 font-mono font-bold">{customerCode.trim() || '—'}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[11px]">Mode</span>
@@ -887,21 +920,47 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
                 </div>
               </div>
 
+              {/* Clean Production Workspace Checkbox */}
+              <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 flex items-start space-x-3">
+                <input
+                  type="checkbox"
+                  id="clearWorkspaceCheck"
+                  checked={clearWorkspace}
+                  onChange={(e) => setClearWorkspace(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900 w-4 h-4 cursor-pointer"
+                />
+                <div>
+                  <label htmlFor="clearWorkspaceCheck" className="text-xs font-bold text-white cursor-pointer block">
+                    Start with a clean, empty production workspace (No Demo PCs or Example Profiles)
+                  </label>
+                  <p className="text-[11px] text-emerald-200/80 mt-0.5 leading-relaxed">
+                    Purges all sample/demo workstations, sample customer profiles, and sample deployment records so your instance contains only real production data.
+                  </p>
+                </div>
+              </div>
+
               {/* Initial LDAP Sync Checkbox */}
               <div className="p-4 rounded-2xl bg-cyan-950/50 border border-cyan-800/60 flex items-start space-x-3">
                 <input
                   type="checkbox"
                   id="initialSyncCheck"
                   checked={initialSyncAD}
+                  disabled={!adLdapUrl.trim()}
                   onChange={(e) => setInitialSyncAD(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 bg-slate-900 w-4 h-4 cursor-pointer"
+                  className="mt-0.5 rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 bg-slate-900 w-4 h-4 cursor-pointer disabled:opacity-50"
                 />
                 <div>
                   <label htmlFor="initialSyncCheck" className="text-xs font-bold text-white cursor-pointer block">
-                    Perform initial Active Directory computer discovery & LDAP sync immediately
+                    Perform live Active Directory LDAP computer discovery immediately
                   </label>
                   <p className="text-[11px] text-cyan-200/80 mt-0.5 leading-relaxed">
-                    Queries the configured Active Directory domain controller (<code>{adLdapUrl}</code>) for workstations inside <code>{adComputerSearchOu}</code> and seeds them into the Active Directory inventory.
+                    {adLdapUrl.trim() ? (
+                      <>
+                        Connects via LDAPv3 to <code>{adLdapUrl}</code> and queries <code>{adComputerSearchOu || adBaseDn || 'RootDSE'}</code> for real domain computer objects, then opens the <strong>AD Computers</strong> tab.
+                      </>
+                    ) : (
+                      'Enter a Domain Controller LDAP URL in Step 3 to enable immediate Active Directory computer discovery.'
+                    )}
                   </p>
                 </div>
               </div>

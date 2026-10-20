@@ -253,17 +253,28 @@ export interface AppSettings {
 export interface ADComputer {
   id: string;
   name: string; // NetBIOS name, e.g. "WS-FINANCE-01"
-  dnsHostName: string; // FQDN, e.g. "ws-finance-01.corp.internal.net"
-  operatingSystem: string; // e.g. "Windows 11 Pro 23H2"
+  fqdn?: string; // FQDN, e.g. "ws-finance-01.corp.internal.net"
+  dnsHostName?: string;
+  domain?: string;
+  osName?: string;
+  osBuild?: string;
+  operatingSystem?: string; // e.g. "Windows 11 Pro 23H2"
   ouPath: string; // e.g. "OU=Finance,OU=Workstations,DC=corp,DC=internal,DC=net"
   ipAddress: string;
+  macAddress?: string;
   status: 'Online' | 'Offline' | 'AgentConnected';
-  pingMs?: number;
+  pingMs?: number | null;
   lastSeen: string;
-  agentInstalled: boolean;
-  agentVersion?: string;
+  agentInstalled?: boolean;
+  agentStatus?: 'Installed' | 'Not Installed' | 'Outdated';
+  agentVersion?: string | null;
   lastHeartbeat?: string;
-  installedPackageIds: string[];
+  lastAgentHeartbeat?: string | null;
+  loggedInUser?: string | null;
+  hardwareModel?: string;
+  ramGb?: number;
+  diskFreeGb?: number;
+  installedPackageIds?: string[];
   customerProfileId: string;
   description?: string;
   currentUser?: string;
@@ -273,9 +284,9 @@ export interface ADComputer {
 export interface QueuedTask {
   id: string;
   machineName: string;
-  taskType: 'SoftwareInstall' | 'SoftwareUpdate' | 'FullProvisioning' | 'ConfigSwitch' | 'ComplianceScan';
+  taskType: 'SoftwareInstall' | 'SoftwareUpdate' | 'FullProvisioning' | 'ConfigSwitch' | 'ComplianceScan' | 'CustomScript' | 'AgentInstall' | 'SoftwareDeploy';
   title: string;
-  status: 'queued' | 'dispatching' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'queued' | 'dispatching' | 'running' | 'completed' | 'failed' | 'cancelled' | 'Queued' | 'Completed' | 'Failed';
   payload: {
     packageIds?: string[];
     customerProfileId?: string;
@@ -284,6 +295,7 @@ export interface QueuedTask {
     switchIds?: string[];
     switchParameters?: Record<string, string | number>;
     command?: string;
+    customScript?: string;
   };
   executionMode: 'agent_system' | 'service_account' | 'interactive';
   serviceAccount?: string;

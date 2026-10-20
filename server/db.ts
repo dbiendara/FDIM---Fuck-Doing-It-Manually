@@ -113,25 +113,20 @@ export function seedInitialDataIfEmpty(
     }
   }
 
-  const custCount = (db.prepare('SELECT COUNT(*) as cnt FROM customers').get() as { cnt: number }).cnt;
-  if (custCount === 0) {
-    const insertCust = db.prepare('INSERT INTO customers (id, data, updated_at) VALUES (?, ?, ?)');
-    for (const cust of initialCustomers) {
-      insertCust.run(cust.id, JSON.stringify(cust), new Date().toISOString());
-    }
+  // Production mode: Do NOT seed demo customer profiles or demo deployment records.
+  // One-time cleanup of any previously seeded demo data so the workspace is clean for production.
+  const cleanMigration = db.prepare('SELECT value FROM settings WHERE key = ?').get('production_clean_v3') as { value: string } | undefined;
+  if (!cleanMigration) {
+    db.prepare("DELETE FROM customers WHERE id IN ('cust-acme', 'cust-contoso', 'cust-nexus', 'cust-apex', 'cust-medicare', 'cust-cloudscale') OR data LIKE '%Contoso Enterprise%'").run();
+    db.prepare("DELETE FROM ad_computers WHERE id LIKE 'comp-0%' OR id = 'comp-10' OR id LIKE 'comp-ad-%' OR data LIKE '%Newly domain-joined computer discovered%' OR data LIKE '%Primary domain workstation discovered%' OR data LIKE '%Mobile domain client discovered%' OR data LIKE '%Imported into FDIM Suite%'").run();
+    db.prepare("DELETE FROM deployments WHERE id LIKE 'dep-init-%'").run();
+    db.prepare("DELETE FROM queued_tasks WHERE id IN ('task-q-01', 'task-q-02')").run();
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('production_clean_v3', 'true');
   }
 
   const insertSwitch = db.prepare('INSERT OR IGNORE INTO system_switches (id, data, updated_at) VALUES (?, ?, ?)');
   for (const sw of initialSwitches) {
     insertSwitch.run(sw.id, JSON.stringify(sw), new Date().toISOString());
-  }
-
-  const depCount = (db.prepare('SELECT COUNT(*) as cnt FROM deployments').get() as { cnt: number }).cnt;
-  if (depCount === 0) {
-    const insertDep = db.prepare('INSERT INTO deployments (id, data, started_at) VALUES (?, ?, ?)');
-    for (const dep of initialDeployments) {
-      insertDep.run(dep.id, JSON.stringify(dep), dep.startedAt || new Date().toISOString());
-    }
   }
 
   // Initial App Settings
@@ -471,196 +466,26 @@ export function deleteADComputer(id: string): boolean {
 }
 
 export function seedInitialADComputersIfEmpty() {
-  const count = (db.prepare('SELECT COUNT(*) as cnt FROM ad_computers').get() as { cnt: number }).cnt;
-  if (count > 0) return;
+  // Production mode: Do not seed demo AD computers.
+}
 
-  const now = new Date();
-  const sampleComputers: ADComputer[] = [
-    {
-      id: 'comp-01',
-      name: 'ACME-WS-084',
-      dnsHostName: 'acme-ws-084.acme.corp',
-      operatingSystem: 'Windows 11 Pro 23H2 (Build 22631.3880)',
-      ouPath: 'OU=Workstations,OU=HQ,DC=acme,DC=corp',
-      ipAddress: '192.168.10.84',
-      status: 'AgentConnected',
-      pingMs: 4,
-      lastSeen: new Date(now.getTime() - 2 * 60000).toISOString(),
-      agentInstalled: true,
-      agentVersion: '1.4.0',
-      lastHeartbeat: new Date(now.getTime() - 2 * 60000).toISOString(),
-      installedPackageIds: ['pkg-teamviewer', 'pkg-chrome', 'pkg-7zip', 'pkg-m365'],
-      customerProfileId: 'cust-acme',
-      description: 'Engineering Workstation - Desk 4B',
-      currentUser: 'ACME\\jdoe',
-      uptimeHours: 72,
-    },
-    {
-      id: 'comp-02',
-      name: 'ACME-WS-085',
-      dnsHostName: 'acme-ws-085.acme.corp',
-      operatingSystem: 'Windows 11 Pro 23H2 (Build 22631.3880)',
-      ouPath: 'OU=Workstations,OU=HQ,DC=acme,DC=corp',
-      ipAddress: '192.168.10.85',
-      status: 'Online',
-      pingMs: 6,
-      lastSeen: new Date(now.getTime() - 5 * 60000).toISOString(),
-      agentInstalled: false,
-      installedPackageIds: ['pkg-chrome', 'pkg-7zip'],
-      customerProfileId: 'cust-acme',
-      description: 'Operations Workstation - Desk 4C',
-      currentUser: 'ACME\\mweber',
-      uptimeHours: 24,
-    },
-    {
-      id: 'comp-03',
-      name: 'ACME-LAP-102',
-      dnsHostName: 'acme-lap-102.acme.corp',
-      operatingSystem: 'Windows 11 Enterprise 23H2',
-      ouPath: 'OU=Laptops,OU=FieldStaff,DC=acme,DC=corp',
-      ipAddress: '192.168.20.102',
-      status: 'Offline',
-      lastSeen: new Date(now.getTime() - 14 * 3600000).toISOString(),
-      agentInstalled: true,
-      agentVersion: '1.4.0',
-      lastHeartbeat: new Date(now.getTime() - 14 * 3600000).toISOString(),
-      installedPackageIds: ['pkg-teamviewer', 'pkg-chrome', 'pkg-7zip'],
-      customerProfileId: 'cust-acme',
-      description: 'Sales Field Laptop - Lenovo T14 Gen 4',
-      currentUser: 'ACME\\tschmidt',
-      uptimeHours: 0,
-    },
-    {
-      id: 'comp-04',
-      name: 'ACME-FIN-01',
-      dnsHostName: 'acme-fin-01.acme.corp',
-      operatingSystem: 'Windows 11 Pro 23H2',
-      ouPath: 'OU=Finance,OU=HQ,DC=acme,DC=corp',
-      ipAddress: '192.168.15.22',
-      status: 'AgentConnected',
-      pingMs: 3,
-      lastSeen: new Date(now.getTime() - 1 * 60000).toISOString(),
-      agentInstalled: true,
-      agentVersion: '1.4.0',
-      lastHeartbeat: new Date(now.getTime() - 1 * 60000).toISOString(),
-      installedPackageIds: ['pkg-teamviewer', 'pkg-chrome', 'pkg-7zip', 'pkg-m365', 'pkg-crowdstrike'],
-      customerProfileId: 'cust-acme',
-      description: 'Accounting Chief Terminal',
-      currentUser: 'ACME\\aklein',
-      uptimeHours: 168,
-    },
-    {
-      id: 'comp-05',
-      name: 'ACME-PROD-02',
-      dnsHostName: 'acme-prod-02.acme.corp',
-      operatingSystem: 'Windows 10 Enterprise LTSC 2021',
-      ouPath: 'OU=Production,OU=ShopFloor,DC=acme,DC=corp',
-      ipAddress: '192.168.40.12',
-      status: 'Offline',
-      lastSeen: new Date(now.getTime() - 28 * 3600000).toISOString(),
-      agentInstalled: false,
-      installedPackageIds: ['pkg-7zip'],
-      customerProfileId: 'cust-acme',
-      description: 'Factory Assembly Line Controller 2',
-      uptimeHours: 0,
-    },
-    {
-      id: 'comp-06',
-      name: 'MED-CLINIC-04',
-      dnsHostName: 'med-clinic-04.medicare.local',
-      operatingSystem: 'Windows 11 Pro 23H2',
-      ouPath: 'OU=TreatmentRooms,OU=Clinics,DC=medicare,DC=local',
-      ipAddress: '10.20.4.14',
-      status: 'AgentConnected',
-      pingMs: 5,
-      lastSeen: new Date(now.getTime() - 4 * 60000).toISOString(),
-      agentInstalled: true,
-      agentVersion: '1.4.0',
-      lastHeartbeat: new Date(now.getTime() - 4 * 60000).toISOString(),
-      installedPackageIds: ['pkg-teamviewer', 'pkg-chrome', 'pkg-vlc', 'pkg-acrobat'],
-      customerProfileId: 'cust-medicare',
-      description: 'Exam Room 4 Clinical All-in-One',
-      currentUser: 'MEDICARE\\dr_fischer',
-      uptimeHours: 48,
-    },
-    {
-      id: 'comp-07',
-      name: 'MED-NURSE-02',
-      dnsHostName: 'med-nurse-02.medicare.local',
-      operatingSystem: 'Windows 10 Pro 22H2',
-      ouPath: 'OU=WardStations,OU=Clinics,DC=medicare,DC=local',
-      ipAddress: '10.20.5.21',
-      status: 'Offline',
-      lastSeen: new Date(now.getTime() - 3 * 3600000).toISOString(),
-      agentInstalled: true,
-      agentVersion: '1.3.9',
-      lastHeartbeat: new Date(now.getTime() - 3 * 3600000).toISOString(),
-      installedPackageIds: ['pkg-teamviewer', 'pkg-chrome'],
-      customerProfileId: 'cust-medicare',
-      description: 'Station 2 Mobile Cart',
-      currentUser: 'MEDICARE\\nurse_braun',
-      uptimeHours: 0,
-    },
-    {
-      id: 'comp-08',
-      name: 'CLOUD-DEV-01',
-      dnsHostName: 'cloud-dev-01.cloudscale.io',
-      operatingSystem: 'Windows 11 Enterprise 23H2',
-      ouPath: 'OU=Engineers,OU=DevOps,DC=cloudscale,DC=io',
-      ipAddress: '172.16.100.45',
-      status: 'AgentConnected',
-      pingMs: 2,
-      lastSeen: new Date(now.getTime() - 10 * 1000).toISOString(),
-      agentInstalled: true,
-      agentVersion: '1.4.0',
-      lastHeartbeat: new Date(now.getTime() - 10 * 1000).toISOString(),
-      installedPackageIds: ['pkg-chrome', 'pkg-notepadpp', 'pkg-7zip'],
-      customerProfileId: 'cust-cloudscale',
-      description: 'DevOps Senior Workstation',
-      currentUser: 'CLOUDSCALE\\srichter',
-      uptimeHours: 240,
-    },
-    {
-      id: 'comp-09',
-      name: 'CLOUD-DEV-02',
-      dnsHostName: 'cloud-dev-02.cloudscale.io',
-      operatingSystem: 'Windows 11 Enterprise 23H2',
-      ouPath: 'OU=Engineers,OU=DevOps,DC=cloudscale,DC=io',
-      ipAddress: '172.16.100.46',
-      status: 'Online',
-      pingMs: 4,
-      lastSeen: new Date(now.getTime() - 12 * 60000).toISOString(),
-      agentInstalled: false,
-      installedPackageIds: ['pkg-chrome'],
-      customerProfileId: 'cust-cloudscale',
-      description: 'Frontend Developer Workstation',
-      currentUser: 'CLOUDSCALE\\lbecker',
-      uptimeHours: 18,
-    },
-    {
-      id: 'comp-10',
-      name: 'PROXMOX-TEST-VM01',
-      dnsHostName: 'proxmox-test-vm01.lab.internal',
-      operatingSystem: 'Windows 11 Pro 23H2 (Clean Test Template)',
-      ouPath: 'OU=Sandbox,OU=Lab,DC=corp,DC=internal,DC=net',
-      ipAddress: '192.168.99.11',
-      status: 'AgentConnected',
-      pingMs: 1,
-      lastSeen: new Date(now.getTime() - 30 * 1000).toISOString(),
-      agentInstalled: true,
-      agentVersion: '1.4.0',
-      lastHeartbeat: new Date(now.getTime() - 30 * 1000).toISOString(),
-      installedPackageIds: [],
-      customerProfileId: 'cust-acme',
-      description: 'Dedicated Proxmox VE Package Verification Sandbox (PVE VMID 9001)',
-      currentUser: 'SYSTEM',
-      uptimeHours: 3,
-    },
-  ];
-
-  const insert = db.prepare('INSERT INTO ad_computers (id, name, data, updated_at) VALUES (?, ?, ?, ?)');
-  for (const c of sampleComputers) {
-    insert.run(c.id, c.name, JSON.stringify(c), c.lastSeen);
+export function clearProductionWorkspace(options?: {
+  clearCustomers?: boolean;
+  clearComputers?: boolean;
+  clearDeployments?: boolean;
+  clearTasks?: boolean;
+}) {
+  if (options?.clearCustomers !== false) {
+    db.prepare('DELETE FROM customers').run();
+  }
+  if (options?.clearComputers !== false) {
+    db.prepare('DELETE FROM ad_computers').run();
+  }
+  if (options?.clearDeployments !== false) {
+    db.prepare('DELETE FROM deployments').run();
+  }
+  if (options?.clearTasks !== false) {
+    db.prepare('DELETE FROM queued_tasks').run();
   }
 }
 
@@ -730,50 +555,7 @@ export function deleteQueuedTask(id: string): boolean {
 }
 
 export function seedInitialQueuedTasksIfEmpty() {
-  const count = (db.prepare('SELECT COUNT(*) as cnt FROM queued_tasks').get() as { cnt: number }).cnt;
-  if (count > 0) return;
-
-  const now = new Date();
-  const sampleTasks: QueuedTask[] = [
-    {
-      id: 'task-q-01',
-      machineName: 'ACME-LAP-102',
-      taskType: 'SoftwareInstall',
-      title: 'Install CrowdStrike Falcon Sensor & M365 Apps',
-      status: 'queued',
-      payload: {
-        packageIds: ['pkg-crowdstrike', 'pkg-m365'],
-        customerProfileId: 'cust-acme',
-      },
-      executionMode: 'agent_system',
-      serviceAccount: 'CORP\\svc_fdim_runner',
-      createdAt: new Date(now.getTime() - 2 * 3600000).toISOString(),
-      createdBy: 'Helpdesk (Field Deployment)',
-      retryCount: 0,
-      maxRetries: 3,
-    },
-    {
-      id: 'task-q-02',
-      machineName: 'ACME-PROD-02',
-      taskType: 'ConfigSwitch',
-      title: 'Apply Active Directory Admin Delegation & RDP Firewall',
-      status: 'queued',
-      payload: {
-        switchIds: ['sw-rdp', 'sw-adgroup'],
-        switchParameters: { adAdminGroupName: 'ACME\\IT-Workstation-Admins' },
-      },
-      executionMode: 'service_account',
-      serviceAccount: 'CORP\\svc_fdim_runner',
-      createdAt: new Date(now.getTime() - 5 * 3600000).toISOString(),
-      createdBy: 'Admin (System Configuration)',
-      retryCount: 0,
-      maxRetries: 3,
-    },
-  ];
-
-  for (const t of sampleTasks) {
-    saveQueuedTask(t);
-  }
+  // Production mode: Do not seed demo queued tasks.
 }
 
 // -------------------------------------------------------------
