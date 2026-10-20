@@ -8,7 +8,7 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 
 ---
 
-![FDIM Workstation Provisioning Suite](src/assets/images/fdim_streamlined_wizard.jpg)
+![FDIM Workstation Provisioning Suite](src/assets/images/fdim_streamlined_wizard.png)
 
 ---
 
@@ -16,7 +16,7 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 
 ### 🧭 Streamlined Navigation & Centralized Operations Menu
 
-![FDIM Streamlined Operations Menu](src/assets/images/fdim_streamlined_menu.jpg)
+![FDIM Streamlined Operations Menu](src/assets/images/fdim_streamlined_menu.png)
 
 - **Zero-Clutter Header Architecture**: Completely overhauled navigation eliminating header overload with a clean, focused primary bar:
   - **PC Setup**: Interactive workstation provisioning wizard with auto-save draft state.
@@ -39,7 +39,7 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 
 ### 🖥️ Active Directory Computers Directory & Multi-PC Bulk Rollouts
 
-![Active Directory Computers Directory](src/assets/images/fdim_streamlined_ad_computers.jpg)
+![Active Directory Computers Directory](src/assets/images/fdim_streamlined_ad_computers.png)
 
 - **Live AD Domain Computer Inventory**: Complete directory of all domain-joined client workstations, Laptops, and departmental PCs with real-time status tracking.
 - **LDAP Tree Sync & Auto-Discovery**: One-click LDAP synchronization with corporate Domain Controllers (`(&(objectCategory=computer)(objectClass=user))`) to discover new endpoints and track OU memberships.
@@ -165,7 +165,7 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 
 ### 🖧 User First-Logon Staging & Central Snippets Library
 
-![First-Run User Logon Snippets Library](src/assets/images/fdim_first_run_snippets.jpg)
+![First-Run User Logon Snippets Library](src/assets/images/fdim_first_run_snippets.png)
 
 - **Solves Non-Logged-In User Limitation**: Workstation provisioning runs as Administrator or SYSTEM before the employee ever logs in. Network drive mappings (`HKCU:\Network`), per-user network printers, and user profile customizations require the user's interactive Kerberos security token.
 - **Dedicated Central First-Run Snippets Library (`FirstRunSnippetsManager`)**:
@@ -202,12 +202,12 @@ With FDIM, technicians can select or customize client profiles, enforce critical
 
 | **Workstation Deployment Wizard** | **Streamlined Operations & Config Menu** |
 |:---:|:---:|
-| ![Workstation Wizard](src/assets/images/fdim_streamlined_wizard.jpg) | ![Streamlined Operations Menu](src/assets/images/fdim_streamlined_menu.jpg) |
+| ![Workstation Wizard](src/assets/images/fdim_streamlined_wizard.png) | ![Streamlined Operations Menu](src/assets/images/fdim_streamlined_menu.png) |
 | *Streamlined provisioning: Customer profile, System configuration, and Step 4 First-Run Snippets* | *Clutter-free navigation: Operations & Monitoring + Configuration & Libraries dropdown* |
 
 | **First-Run User Logon Snippets Library** | **Active Directory Computers Directory** |
 |:---:|:---:|
-| ![First-Run Snippets](src/assets/images/fdim_first_run_snippets.jpg) | ![AD Computers](src/assets/images/fdim_streamlined_ad_computers.jpg) |
+| ![First-Run Snippets](src/assets/images/fdim_first_run_snippets.png) | ![AD Computers](src/assets/images/fdim_streamlined_ad_computers.png) |
 | *Central library of reusable PowerShell user logon scripts with categorizations & tags* | *LDAP domain inventory with real-time ping reachability & multi-PC bulk rollouts* |
 
 | **Live Runner PowerShell Terminal** | **Autonomous Client Agent & Wait-Tasks Queue** |
