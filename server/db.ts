@@ -129,35 +129,35 @@ export function seedInitialDataIfEmpty(
     insertSwitch.run(sw.id, JSON.stringify(sw), new Date().toISOString());
   }
 
-  // Initial App Settings
+  // Initial App Settings (use RFC-safe .local default so public wildcard DNS never hijacks internal hostnames)
   const defaultSettings: AppSettings = {
-    defaultGlobalDomain: 'corp.internal.net',
+    defaultGlobalDomain: 'corp.local',
     authMode: 'local',
     adLdapConfig: {
-      ldapUrl: 'ldaps://dc01.corp.internal.net:636',
-      domain: 'CORP',
-      baseDn: 'DC=corp,DC=internal,DC=net',
-      bindDn: 'CN=svc_fdim,OU=ServiceAccounts,DC=corp,DC=internal,DC=net',
+      ldapUrl: '',
+      domain: '',
+      baseDn: '',
+      bindDn: '',
       userSearchFilter: '(sAMAccountName={username})',
-      adminGroup: 'FDIM-Admins',
+      adminGroup: 'Domain Admins',
     },
     keycloakConfig: {
-      serverUrl: 'https://keycloak.corp.internal.net',
+      serverUrl: '',
       realm: 'enterprise',
       clientId: 'fdim-suite',
       clientSecret: '',
-      redirectUri: 'https://fdim.corp.internal.net/oauth/callback',
+      redirectUri: '',
     },
     runnerServiceAccount: {
-      enabled: true,
-      username: 'CORP\\svc_fdim_runner',
-      domain: 'CORP',
+      enabled: false,
+      username: 'Administrator',
+      domain: '',
       description: 'Dedicated elevated service account for Helpdesk delegated package deployment without local admin rights',
       delegatedHelpdeskAllowed: true,
     },
     proxmoxConfig: {
-      enabled: true,
-      apiUrl: 'https://pve01.corp.internal:8006/api2/json',
+      enabled: false,
+      apiUrl: '',
       node: 'pve-node1',
       vmTemplateId: 9000,
       cleanSnapshotName: 'clean-baseline',
@@ -166,7 +166,7 @@ export function seedInitialDataIfEmpty(
     agentConfig: {
       heartbeatIntervalMinutes: 30,
       bootDelayMinutes: 5,
-      serverUrl: 'http://fdim.corp.internal:3000',
+      serverUrl: '',
       encryptionMode: 'token-bearer',
       preSharedKey: 'fdim_sec_a7f92e41c88d30e15b6782fa901c34ef',
       enforceHttps: false,
@@ -193,7 +193,34 @@ export function seedInitialDataIfEmpty(
   const settingsRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('global') as { value: string } | undefined;
   if (!settingsRow) {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('global', JSON.stringify(defaultSettings));
+  } else {
+    try {
+      const parsed = JSON.parse(settingsRow.value) as AppSettings;
+      let changed = false;
+      if (parsed.defaultGlobalDomain === 'corp.internal.net') {
+        parsed.defaultGlobalDomain = 'corp.local';
+        changed = true;
+      }
+      if (parsed.adLdapConfig?.ldapUrl === 'ldaps://dc01.corp.internal.net:636') {
+        parsed.adLdapConfig.ldapUrl = '';
+        parsed.adLdapConfig.domain = '';
+        parsed.adLdapConfig.baseDn = '';
+        parsed.adLdapConfig.bindDn = '';
+        changed = true;
+      }
+      if (parsed.agentConfig?.serverUrl === 'http://fdim.corp.internal:3000') {
+        parsed.agentConfig.serverUrl = '';
+        changed = true;
+      }
+      if (changed) {
+        db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('global', JSON.stringify(parsed));
+      }
+    } catch {
+      // ignore
+    }
   }
+  // Also remove any test/bogus computer that got the 172.104.149.86 wildcard IP
+  db.prepare("DELETE FROM ad_computers WHERE data LIKE '%172.104.149.86%'").run();
 
   // Initial Users
   const userCount = (db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number }).cnt;

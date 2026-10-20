@@ -378,11 +378,161 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
     }
   };
 
+  // Generate live PowerShell scripts for Option A, Option B (WinRM / SMB / WMI), and Option C (Standalone)
+  const buildClientAgentScripts = (
+    targets: ADComputer[],
+    rawServerUrl: string,
+    transportMode: 'WinRM' | 'SMB' | 'WMI',
+    adminUserRaw: string,
+    adminPassRaw: string
+  ) => {
+    const effectiveUrl = (rawServerUrl.trim() || window.location.origin).replace(/\/+$/, '');
+    const targetAddresses =
+      targets.length > 0
+        ? targets.map((t) =>
+            t.ipAddress && !t.ipAddress.toLowerCase().startsWith('unresolved') ? t.ipAddress : t.name
+          )
+        : ['WORKSTATION-01'];
+    const targetsList = targetAddresses.map((n) => `"${String(n).trim()}"`).join(', ');
+    const targetNamesSummary =
+      targets.length > 0
+        ? targets.map((t) => `${t.name} (${t.ipAddress || 'DNS'})`).join(', ')
+        : 'Target Workstations';
+    const credUser = adminUserRaw.trim() || 'DOMAIN\\Administrator';
+
+    const bootstrapOneLiner = `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-RestMethod -Uri "${effectiveUrl}/api/agent/script/installer?serverUrl=${encodeURIComponent(effectiveUrl)}" -UseBasicParsing | Invoke-Expression`;
+
+    const credSnippet = adminPassRaw
+      ? `$SecPass = ConvertTo-SecureString "${adminPassRaw.replace(/"/g, '`"')}" -AsPlainText -Force\n$Cred = New-Object System.Management.Automation.PSCredential("${credUser}", $SecPass)`
+      : `$Cred = Get-Credential -UserName "${credUser}" -Message "Enter Domain Admin credentials for FDIM Agent deployment"`;
+
+    let remotePushScript = '';
+    if (transportMode === 'WMI') {
+      remotePushScript = `# ==============================================================================
+# FDIM Client Agent Remote Push Script — WMI / CIM Process Call (TCP 135 / DCOM)
+# Targets: ${targetNamesSummary}
+# Server:  ${effectiveUrl}
+# ==============================================================================
+$Targets = @(${targetsList})
+$ServerUrl = "${effectiveUrl}"
+${credSnippet}
+
+$BootstrapCmd = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-RestMethod -Uri '$ServerUrl/api/agent/script/installer?serverUrl=$([uri]::EscapeDataString($ServerUrl))' -UseBasicParsing | Invoke-Expression"""
+
+foreach ($Target in $Targets) {
+    Write-Host "[*] Deploying FDIM Client Agent to $Target via WMI/CIM (Win32_Process)..." -ForegroundColor Cyan
+    try {
+        $CimOpt = New-CimSessionOption -Protocol Dcom
+        $Session = New-CimSession -ComputerName $Target -Credential $Cred -SessionOption $CimOpt -ErrorAction Stop
+        $Result = Invoke-CimMethod -CimSession $Session -ClassName Win32_Process -MethodName Create -Arguments @{
+            CommandLine = $BootstrapCmd
+        } -ErrorAction Stop
+        if ($Result.ReturnValue -eq 0) {
+            Write-Host "[OK] Agent installer launched on $Target (PID: $($Result.ProcessId))!" -ForegroundColor Green
+        } else {
+            Write-Warning "[!] Win32_Process.Create returned code $($Result.ReturnValue) on $Target"
+        }
+        Remove-CimSession $Session -ErrorAction SilentlyContinue
+    } catch {
+        Write-Warning "[!] WMI/CIM failed on $Target: $_"
+    }
+}`;
+    } else if (transportMode === 'SMB') {
+      remotePushScript = `# ==============================================================================
+# FDIM Client Agent Remote Push Script — SMB Admin$ Share + Scheduled Task (TCP 445)
+# Targets: ${targetNamesSummary}
+# Server:  ${effectiveUrl}
+# ==============================================================================
+$Targets = @(${targetsList})
+$ServerUrl = "${effectiveUrl}"
+${credSnippet}
+
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$InstallerContent = Invoke-RestMethod -Uri "$ServerUrl/api/agent/script/installer?serverUrl=$([uri]::EscapeDataString($ServerUrl))" -UseBasicParsing
+
+foreach ($Target in $Targets) {
+    Write-Host "[*] Staging FDIM Agent via SMB ADMIN$ on $Target..." -ForegroundColor Cyan
+    try {
+        New-PSDrive -Name "FDIMSMB" -PSProvider FileSystem -Root "\\\\$Target\\ADMIN$\\Temp" -Credential $Cred -ErrorAction Stop | Out-Null
+        Set-Content -Path "FDIMSMB:\\Install-FDIMAgent.ps1" -Value $InstallerContent -Encoding UTF8 -Force
+        Remove-PSDrive -Name "FDIMSMB" -ErrorAction SilentlyContinue
+
+        $PlainPass = $Cred.GetNetworkCredential().Password
+        schtasks.exe /Create /S $Target /U "$($Cred.UserName)" /P "$PlainPass" /RU "SYSTEM" /SC ONCE /ST 00:00 /TN "FDIM-Agent-Bootstrap" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\Install-FDIMAgent.ps1" /RL HIGHEST /F | Out-Null
+        schtasks.exe /Run /S $Target /U "$($Cred.UserName)" /P "$PlainPass" /TN "FDIM-Agent-Bootstrap" | Out-Null
+        Write-Host "[OK] FDIM Agent staged and executed as SYSTEM on $Target!" -ForegroundColor Green
+    } catch {
+        Remove-PSDrive -Name "FDIMSMB" -ErrorAction SilentlyContinue
+        Write-Warning "[!] SMB deployment failed on $Target: $_"
+    }
+}`;
+    } else {
+      remotePushScript = `# ==============================================================================
+# FDIM Client Agent Remote Push Script — WinRM / PowerShell Remoting (TCP 5985/5986)
+# Targets: ${targetNamesSummary}
+# Server:  ${effectiveUrl}
+# ==============================================================================
+$Targets = @(${targetsList})
+$ServerUrl = "${effectiveUrl}"
+${credSnippet}
+
+foreach ($Target in $Targets) {
+    Write-Host "[*] Deploying FDIM Client Agent to $Target via WinRM..." -ForegroundColor Cyan
+    try {
+        Invoke-Command -ComputerName $Target -Credential $Cred -ScriptBlock {
+            param($Url)
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $installer = Invoke-RestMethod -Uri "$Url/api/agent/script/installer?serverUrl=$([uri]::EscapeDataString($Url))" -UseBasicParsing
+            Invoke-Expression $installer
+        } -ArgumentList $ServerUrl -ErrorAction Stop
+        Write-Host "[OK] FDIM Agent installed and heartbeat triggered on $Target!" -ForegroundColor Green
+    } catch {
+        Write-Warning "[!] WinRM failed on $Target: $_"
+    }
+}`;
+    }
+
+    return { bootstrapOneLiner, remotePushScript };
+  };
+
+  const downloadPs1Script = (filename: string, content: string) => {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   // Open Deploy Agent Modal for one or multiple computers
   const handleOpenDeployAgent = (targets: ADComputer[]) => {
     if (targets.length === 0) return;
     setDeployAgentTargets(targets);
-    setDeployAgentResult(null);
+    const initialScripts = buildClientAgentScripts(
+      targets,
+      deployServerUrl,
+      deployTransport,
+      deployAdminUser,
+      deployAdminPassword
+    );
+    setDeployAgentResult({
+      message: `Ready to deploy FDIM Client Agent to ${targets.map((t) => t.name).join(', ')}. Click "Probe Endpoints & Deploy Agent" to test network ports, or copy the PowerShell scripts below immediately.`,
+      results: targets.map((t) => ({
+        id: t.id,
+        name: t.name,
+        fqdn: t.fqdn || t.dnsHostName || t.name,
+        ipAddress: t.ipAddress || 'Unresolved',
+        reachable: t.status === 'Online' || t.status === 'AgentConnected',
+        pingMs: t.pingMs ?? null,
+        status: t.status,
+        detail: 'Ready — Click "Probe Endpoints & Deploy Agent" to test live ports & queue task',
+      })),
+      remotePushScript: initialScripts.remotePushScript,
+      bootstrapOneLiner: initialScripts.bootstrapOneLiner,
+    });
     setIsDeployAgentModalOpen(true);
   };
 
@@ -390,12 +540,20 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
   const handleExecuteDeployAgent = async () => {
     if (deployAgentTargets.length === 0) return;
     setIsDeployingAgent(true);
+    const fallbackScripts = buildClientAgentScripts(
+      deployAgentTargets,
+      deployServerUrl,
+      deployTransport,
+      deployAdminUser,
+      deployAdminPassword
+    );
     try {
       const res = await fetch('/api/ad-computers/deploy-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           computerIds: deployAgentTargets.map((c) => c.id),
+          machineNames: deployAgentTargets.map((c) => c.name),
           serverUrl: deployServerUrl.trim() || window.location.origin,
           transport: deployTransport,
           adminUsername: deployAdminUser.trim() || undefined,
@@ -406,14 +564,54 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
       if (data.computers) {
         setComputers(data.computers);
       }
+      const mappedResults =
+        Array.isArray(data.results) && data.results.length > 0
+          ? data.results.map((r: any, idx: number) => ({
+              id: r.id || deployAgentTargets[idx]?.id || `res-${idx}`,
+              name: r.name || r.machineName || deployAgentTargets[idx]?.name || 'UNKNOWN',
+              fqdn: r.fqdn || deployAgentTargets[idx]?.fqdn || '',
+              ipAddress: r.ipAddress || deployAgentTargets[idx]?.ipAddress || 'Unresolved',
+              reachable: Boolean(r.reachable),
+              pingMs: r.pingMs ?? null,
+              openPort: r.openPort,
+              status: r.status || 'queued_and_ready',
+              detail: r.detail || r.message || 'Queued deployment task & generated PowerShell script',
+            }))
+          : deployAgentTargets.map((t) => ({
+              id: t.id,
+              name: t.name,
+              fqdn: t.fqdn || t.dnsHostName || t.name,
+              ipAddress: t.ipAddress || 'Unresolved',
+              reachable: false,
+              pingMs: null,
+              status: 'unreachable_queued',
+              detail: 'Queued — Run PowerShell Push Script from Jump Host',
+            }));
+
       setDeployAgentResult({
-        message: data.message || 'Agent deployment processed.',
-        results: data.results || [],
-        remotePushScript: data.remotePushScript || '',
-        bootstrapOneLiner: data.bootstrapOneLiner || '',
+        message:
+          data.message ||
+          `Agent deployment prepared for ${deployAgentTargets.map((t) => t.name).join(', ')}.`,
+        results: mappedResults,
+        remotePushScript: data.remotePushScript || fallbackScripts.remotePushScript,
+        bootstrapOneLiner: data.bootstrapOneLiner || fallbackScripts.bootstrapOneLiner,
       });
     } catch (err: any) {
-      setSyncError(err?.message || 'Failed to initiate agent deployment.');
+      setDeployAgentResult({
+        message: `Generated offline PowerShell deployment scripts for ${deployAgentTargets.map((t) => t.name).join(', ')}.`,
+        results: deployAgentTargets.map((t) => ({
+          id: t.id,
+          name: t.name,
+          fqdn: t.fqdn || t.dnsHostName || t.name,
+          ipAddress: t.ipAddress || 'Unresolved',
+          reachable: false,
+          pingMs: null,
+          status: 'unreachable_queued',
+          detail: 'Run PowerShell Push Script from Jump Host',
+        })),
+        remotePushScript: fallbackScripts.remotePushScript,
+        bootstrapOneLiner: fallbackScripts.bootstrapOneLiner,
+      });
     } finally {
       setIsDeployingAgent(false);
     }
@@ -495,11 +693,14 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
       (c.loggedInUser || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (c.description || '').toLowerCase().includes(searchQuery.toLowerCase());
 
+    const isOnline = c.status === 'Online' || c.status === 'AgentConnected';
+    const isAgent = c.agentStatus === 'Installed' || Boolean(c.agentInstalled);
+
     const matchesStatus =
       statusFilter === 'all' ||
-      (statusFilter === 'online' && c.status === 'Online') ||
-      (statusFilter === 'agent' && c.agentStatus === 'Installed') ||
-      (statusFilter === 'offline' && c.status === 'Offline');
+      (statusFilter === 'online' && isOnline) ||
+      (statusFilter === 'agent' && isAgent) ||
+      (statusFilter === 'offline' && !isOnline);
 
     const matchesOu = ouFilter === 'all' || c.ouPath === ouFilter;
     const matchesCustomer = customerFilter === 'all' || c.customerProfileId === customerFilter;
@@ -523,9 +724,18 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
 
   // Stats
   const totalCount = computers.length;
-  const onlineCount = computers.filter((c) => c.status === 'Online').length;
-  const agentInstalledCount = computers.filter((c) => c.agentStatus === 'Installed').length;
+  const onlineCount = computers.filter((c) => c.status === 'Online' || c.status === 'AgentConnected').length;
+  const agentInstalledCount = computers.filter((c) => c.agentStatus === 'Installed' || Boolean(c.agentInstalled)).length;
   const offlineCount = computers.filter((c) => c.status === 'Offline').length;
+
+  // Live computed scripts so changes to URL, Transport, or Credentials immediately reflect in the PowerShell code blocks
+  const liveAgentScripts = buildClientAgentScripts(
+    deployAgentTargets,
+    deployServerUrl,
+    deployTransport,
+    deployAdminUser,
+    deployAdminPassword
+  );
 
   // PowerShell AD Bridge One-Liner for syncing real AD computers from an internal domain machine
   const adBridgePowerShell = `$ServerUrl = "${window.location.origin}"; $SearchBase = "${targetOu || ''}"; $Searcher = New-Object System.DirectoryServices.DirectorySearcher; if ($SearchBase) { $Searcher.SearchRoot = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$SearchBase") }; $Searcher.Filter = "(objectCategory=computer)"; $Searcher.PageSize = 1000; @("name","dNSHostName","operatingSystem","operatingSystemVersion","distinguishedName","description") | ForEach-Object { [void]$Searcher.PropertiesToLoad.Add($_) }; $Computers = foreach ($r in $Searcher.FindAll()) { $p = $r.Properties; $hn = [string]$p["name"][0]; $dns = if ($p["dnshostname"]) { [string]$p["dnshostname"][0] } else { $hn }; $ip = try { ([System.Net.Dns]::GetHostAddresses($dns) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1).IPAddressToString } catch { $null }; @{ name = $hn; fqdn = $dns; ipAddress = $ip; osName = [string]$p["operatingsystem"][0]; osBuild = [string]$p["operatingsystemversion"][0]; ouPath = ([string]$p["distinguishedname"][0] -replace '^CN=[^,]+,',''); description = [string]$p["description"][0] } }; $Body = @{ computers = @($Computers); domain = $env:USERDNSDOMAIN } | ConvertTo-Json -Depth 5; Invoke-RestMethod -Uri "$ServerUrl/api/ad-computers/bulk-import" -Method Post -ContentType "application/json" -Body $Body`;
@@ -940,7 +1150,7 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                         <div className="flex items-center space-x-2.5">
                           <div
                             className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                              comp.status === 'Online'
+                              comp.status === 'Online' || comp.status === 'AgentConnected'
                                 ? 'bg-emerald-400 shadow-sm shadow-emerald-400/80'
                                 : 'bg-slate-600'
                             }`}
@@ -960,7 +1170,9 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                                 </span>
                               )}
                             </div>
-                            <div className="text-[11px] text-slate-500 font-mono">{comp.fqdn}</div>
+                            <div className="text-[11px] text-slate-500 font-mono">
+                              {comp.fqdn || comp.dnsHostName || comp.name.toLowerCase()}
+                            </div>
                             {comp.description && (
                               <div className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
                                 {comp.description}
@@ -974,7 +1186,7 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                       <td className="py-3.5 px-4">
                         <div className="space-y-1">
                           <div className="flex items-center space-x-1.5">
-                            {comp.status === 'Online' ? (
+                            {comp.status === 'Online' || comp.status === 'AgentConnected' ? (
                               <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-700/60">
                                 <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                                 <span>Online {comp.pingMs ? `(${comp.pingMs}ms)` : ''}</span>
@@ -996,7 +1208,7 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                           <div className="flex items-center space-x-1.5 text-[11px] font-mono text-slate-300">
                             <span
                               className={
-                                comp.ipAddress === 'Unresolved (DNS)'
+                                comp.ipAddress && comp.ipAddress.toLowerCase().startsWith('unresolved')
                                   ? 'text-amber-400'
                                   : 'text-slate-300'
                               }
@@ -1007,9 +1219,11 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                               onClick={() => {
                                 setEditingComputer(comp);
                                 setEditIpValue(
-                                  comp.ipAddress === 'Unresolved (DNS)' ? '' : comp.ipAddress
+                                  comp.ipAddress && comp.ipAddress.toLowerCase().startsWith('unresolved')
+                                    ? ''
+                                    : comp.ipAddress
                                 );
-                                setEditOsValue(comp.osName || '');
+                                setEditOsValue(comp.osName || comp.operatingSystem || '');
                                 setEditDescValue(comp.description || '');
                               }}
                               title="Edit IP Address / Host Details"
@@ -1023,7 +1237,7 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
 
                       {/* Client Agent Status */}
                       <td className="py-3.5 px-4">
-                        {comp.agentStatus === 'Installed' ? (
+                        {comp.agentStatus === 'Installed' || comp.agentInstalled ? (
                           <div className="space-y-0.5">
                             <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-950/80 text-cyan-300 border border-cyan-700/60">
                               <ShieldCheck className="w-3 h-3 text-cyan-400" />
@@ -1031,8 +1245,10 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                             </span>
                             <div className="text-[10px] text-slate-500">
                               Heartbeat:{' '}
-                              {comp.lastAgentHeartbeat
-                                ? new Date(comp.lastAgentHeartbeat).toLocaleTimeString([], {
+                              {comp.lastAgentHeartbeat || comp.lastHeartbeat
+                                ? new Date(
+                                    (comp.lastAgentHeartbeat || comp.lastHeartbeat) as string
+                                  ).toLocaleTimeString([], {
                                     hour: '2-digit',
                                     minute: '2-digit',
                                   })
@@ -1060,8 +1276,8 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
                       {/* OS & Hardware */}
                       <td className="py-3.5 px-4">
                         <div className="text-slate-200 font-medium">
-                          {comp.osName}{' '}
-                          <span className="text-slate-500 text-[10px]">({comp.osBuild})</span>
+                          {comp.osName || comp.operatingSystem || 'Windows 11 Pro'}{' '}
+                          {comp.osBuild && <span className="text-slate-500 text-[10px]">({comp.osBuild})</span>}
                         </div>
                         {comp.hardwareModel && comp.hardwareModel !== 'Unknown' && (
                           <div className="flex items-center space-x-2 text-[11px] text-slate-400 mt-0.5">
@@ -1296,96 +1512,131 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
               )}
             </div>
 
-            {/* Deployment Probe & Script Output */}
-            {deployAgentResult && (
-              <div className="space-y-4 pt-3 border-t border-slate-800">
-                <div className="p-3 rounded-xl bg-cyan-950/40 border border-cyan-800/70 text-xs text-cyan-200 font-medium">
-                  {deployAgentResult.message}
-                </div>
-
-                {/* Per-host probe table */}
-                <div className="rounded-xl border border-slate-800 overflow-hidden">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-950 text-[10px] uppercase text-slate-400">
-                      <tr>
-                        <th className="py-2 px-3">Host</th>
-                        <th className="py-2 px-3">Resolved IP</th>
-                        <th className="py-2 px-3">Reachability</th>
-                        <th className="py-2 px-3">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800 bg-slate-900/60">
-                      {deployAgentResult.results.map((r) => (
-                        <tr key={r.id}>
-                          <td className="py-2 px-3 font-mono font-bold text-white">{r.name}</td>
-                          <td className="py-2 px-3 font-mono text-slate-300">{r.ipAddress}</td>
-                          <td className="py-2 px-3">
-                            {r.reachable ? (
-                              <span className="text-emerald-400 font-semibold">
-                                Online ({r.pingMs}ms{r.openPort ? `, TCP ${r.openPort}` : ''})
-                              </span>
-                            ) : (
-                              <span className="text-amber-400">Unreachable from Server</span>
-                            )}
-                          </td>
-                          <td className="py-2 px-3 text-slate-300">{r.detail}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* One-Liner Bootstrapper */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-300">
-                      Option A — 1-Line PowerShell Bootstrapper (Run on target PC):
-                    </span>
-                    <button
-                      onClick={() =>
-                        copyToClipboard(deployAgentResult.bootstrapOneLiner, 'bootstrap-cmd')
-                      }
-                      className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px] font-semibold cursor-pointer"
-                    >
-                      {copiedKey === 'bootstrap-cmd' ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5" />
-                      )}
-                      <span>{copiedKey === 'bootstrap-cmd' ? 'Copied!' : 'Copy One-Liner'}</span>
-                    </button>
+            {/* Deployment Probe & Always-Visible PowerShell Scripts */}
+            <div className="space-y-4 pt-3 border-t border-slate-800">
+              {deployAgentResult && (
+                <>
+                  <div className="p-3 rounded-xl bg-cyan-950/40 border border-cyan-800/70 text-xs text-cyan-200 font-medium">
+                    {deployAgentResult.message}
                   </div>
-                  <pre className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-cyan-300 overflow-x-auto whitespace-pre-wrap break-all">
-                    {deployAgentResult.bootstrapOneLiner}
-                  </pre>
-                </div>
 
-                {/* Remote Push Script */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-300">
-                      Option B — Remote Push Script via WinRM / Invoke-Command (Run from Domain Admin Jump Host):
-                    </span>
+                  {/* Per-host probe table */}
+                  <div className="rounded-xl border border-slate-800 overflow-hidden">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-950 text-[10px] uppercase text-slate-400">
+                        <tr>
+                          <th className="py-2 px-3">Host</th>
+                          <th className="py-2 px-3">Resolved IP</th>
+                          <th className="py-2 px-3">Reachability</th>
+                          <th className="py-2 px-3">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800 bg-slate-900/60">
+                        {(deployAgentResult.results.length > 0
+                          ? deployAgentResult.results
+                          : deployAgentTargets.map((t) => ({
+                              id: t.id,
+                              name: t.name,
+                              fqdn: t.fqdn || t.dnsHostName || t.name,
+                              ipAddress: t.ipAddress || 'Unresolved',
+                              reachable: t.status === 'Online' || t.status === 'AgentConnected',
+                              pingMs: t.pingMs ?? null,
+                              openPort: undefined,
+                              status: t.status,
+                              detail: 'Ready — Use PowerShell scripts below to install agent',
+                            }))
+                        ).map((r) => (
+                          <tr key={r.id || r.name}>
+                            <td className="py-2 px-3 font-mono font-bold text-white">{r.name}</td>
+                            <td className="py-2 px-3 font-mono text-slate-300">{r.ipAddress}</td>
+                            <td className="py-2 px-3">
+                              {r.reachable ? (
+                                <span className="text-emerald-400 font-semibold">
+                                  Online ({r.pingMs ?? 1}ms{r.openPort ? `, TCP ${r.openPort}` : ''})
+                                </span>
+                              ) : (
+                                <span className="text-amber-400">Unreachable from Server</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 text-slate-300">{r.detail}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+
+              {/* One-Liner Bootstrapper */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Option A — 1-Line PowerShell Bootstrapper (Run as Administrator on target PC):
+                  </span>
+                  <button
+                    onClick={() =>
+                      copyToClipboard(
+                        liveAgentScripts.bootstrapOneLiner || deployAgentResult?.bootstrapOneLiner || '',
+                        'bootstrap-cmd'
+                      )
+                    }
+                    className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px] font-semibold cursor-pointer"
+                  >
+                    {copiedKey === 'bootstrap-cmd' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    <span>{copiedKey === 'bootstrap-cmd' ? 'Copied!' : 'Copy One-Liner'}</span>
+                  </button>
+                </div>
+                <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-cyan-300 overflow-x-auto whitespace-pre-wrap break-all select-all">
+                  {liveAgentScripts.bootstrapOneLiner || deployAgentResult?.bootstrapOneLiner}
+                </pre>
+              </div>
+
+              {/* Remote Push Script */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Option B — Remote Push Script via {deployTransport} (Run from Domain Admin Jump Host):
+                  </span>
+                  <div className="flex items-center space-x-2 shrink-0">
                     <button
                       onClick={() =>
-                        copyToClipboard(deployAgentResult.remotePushScript, 'remote-push')
+                        downloadPs1Script(
+                          `Deploy-FDIMAgent-${deployAgentTargets[0]?.name || 'Bulk'}.ps1`,
+                          liveAgentScripts.remotePushScript || deployAgentResult?.remotePushScript || ''
+                        )
                       }
-                      className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px] font-semibold cursor-pointer"
+                      className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-semibold cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Download .ps1</span>
+                    </button>
+                    <button
+                      onClick={() =>
+                        copyToClipboard(
+                          liveAgentScripts.remotePushScript || deployAgentResult?.remotePushScript || '',
+                          'remote-push'
+                        )
+                      }
+                      className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-semibold cursor-pointer"
                     >
                       {copiedKey === 'remote-push' ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <Check className="w-3.5 h-3.5 text-white" />
                       ) : (
                         <Copy className="w-3.5 h-3.5" />
                       )}
                       <span>{copiedKey === 'remote-push' ? 'Copied!' : 'Copy Push Script'}</span>
                     </button>
                   </div>
-                  <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[10px] font-mono text-slate-300 max-h-48 overflow-y-auto whitespace-pre-wrap">
-                    {deployAgentResult.remotePushScript}
-                  </pre>
                 </div>
+                <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-emerald-300 max-h-56 overflow-y-auto whitespace-pre-wrap select-all">
+                  {liveAgentScripts.remotePushScript || deployAgentResult?.remotePushScript}
+                </pre>
               </div>
-            )}
+            </div>
 
             <div className="flex items-center justify-end pt-3 border-t border-slate-800">
               <button

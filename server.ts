@@ -1197,15 +1197,20 @@ async function resolveAndProbeHost(
   openPorts: number[];
 }> {
   const cleanHost = hostname.trim();
-  const domainClean = (domainSuffix || '').trim().replace(/^\.+|\.+$/g, '');
+  const rawDomain = (domainSuffix || '').trim().replace(/^\.+|\.+$/g, '');
+  const domainClean = rawDomain.toLowerCase() === 'corp.internal.net' ? 'corp.local' : rawDomain;
   const fqdn =
     cleanHost.includes('.') || !domainClean
       ? cleanHost.toLowerCase()
       : `${cleanHost.toLowerCase()}.${domainClean.toLowerCase()}`;
 
-  let resolvedIp = explicitIp && explicitIp.trim() && explicitIp.trim().toLowerCase() !== 'unresolved'
-    ? explicitIp.trim()
-    : '';
+  let resolvedIp =
+    explicitIp &&
+    explicitIp.trim() &&
+    !explicitIp.trim().toLowerCase().startsWith('unresolved') &&
+    explicitIp.trim() !== '172.104.149.86'
+      ? explicitIp.trim()
+      : '';
 
   // If hostname itself is an IPv4 address
   if (!resolvedIp && net.isIP(cleanHost)) {
@@ -1216,12 +1221,14 @@ async function resolveAndProbeHost(
   if (!resolvedIp) {
     try {
       const res = await dns.promises.lookup(cleanHost, { family: 4 });
-      if (res && res.address) resolvedIp = res.address;
+      if (res && res.address && res.address !== '172.104.149.86') resolvedIp = res.address;
     } catch {
-      if (fqdn !== cleanHost.toLowerCase()) {
+      if (fqdn !== cleanHost.toLowerCase() && !fqdn.endsWith('.internal.net')) {
         try {
           const resFqdn = await dns.promises.lookup(fqdn, { family: 4 });
-          if (resFqdn && resFqdn.address) resolvedIp = resFqdn.address;
+          if (resFqdn && resFqdn.address && resFqdn.address !== '172.104.149.86') {
+            resolvedIp = resFqdn.address;
+          }
         } catch {
           // DNS could not resolve
         }
@@ -1231,7 +1238,7 @@ async function resolveAndProbeHost(
 
   if (!resolvedIp) {
     return {
-      ipAddress: 'Unresolved',
+      ipAddress: 'Unresolved (DNS)',
       dnsHostName: fqdn,
       reachable: false,
       latencyMs: undefined,
@@ -1576,29 +1583,38 @@ app.post('/api/ad-computers', async (req, res) => {
     const probe = await resolveAndProbeHost(rawName, explicitIp, domainSuffix);
 
     const existing = getADComputerByName(rawName);
+    const osVal = req.body.osName || req.body.operatingSystem || existing?.osName || existing?.operatingSystem || 'Windows 11 Pro';
+    const dnsVal = req.body.fqdn || req.body.dnsHostName || probe.dnsHostName;
+    const isAgentInstalled = req.body.agentInstalled !== undefined ? !!req.body.agentInstalled : (existing?.agentInstalled || existing?.agentStatus === 'Installed' || false);
     const comp: ADComputer = {
       id: existing?.id || req.body.id || `comp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       name: rawName,
-      dnsHostName: req.body.dnsHostName || probe.dnsHostName,
-      operatingSystem: req.body.operatingSystem || existing?.operatingSystem || 'Windows 11 Pro',
+      fqdn: dnsVal,
+      dnsHostName: dnsVal,
+      domain: domainSuffix || existing?.domain || 'corp.local',
+      osName: osVal,
+      osBuild: req.body.osBuild || existing?.osBuild || '22631',
+      operatingSystem: osVal,
       ouPath: req.body.ouPath || existing?.ouPath || settings.adLdapConfig?.computerSearchOu || settings.adLdapConfig?.baseDn || 'CN=Computers',
       ipAddress: explicitIp || probe.ipAddress,
-      status: existing?.agentInstalled && probe.reachable
+      status: isAgentInstalled && probe.reachable
         ? 'AgentConnected'
         : (probe.reachable ? 'Online' : 'Offline'),
       pingMs: probe.latencyMs,
       lastSeen: new Date().toISOString(),
-      agentInstalled: req.body.agentInstalled !== undefined ? !!req.body.agentInstalled : (existing?.agentInstalled || false),
-      agentVersion: req.body.agentVersion || existing?.agentVersion || (req.body.agentInstalled ? '1.4.0' : undefined),
+      agentInstalled: isAgentInstalled,
+      agentStatus: isAgentInstalled ? 'Installed' : 'Not Installed',
+      agentVersion: req.body.agentVersion || existing?.agentVersion || (isAgentInstalled ? '2.4.1' : undefined),
       installedPackageIds: req.body.installedPackageIds || existing?.installedPackageIds || [],
       customerProfileId: req.body.customerProfileId ?? existing?.customerProfileId ?? (getAllCustomers()[0]?.id || ''),
       description: req.body.description !== undefined ? req.body.description : (existing?.description || 'Manually added workstation'),
-      currentUser: req.body.currentUser || existing?.currentUser,
+      currentUser: req.body.currentUser || req.body.loggedInUser || existing?.currentUser,
+      loggedInUser: req.body.loggedInUser || req.body.currentUser || existing?.loggedInUser || null,
       uptimeHours: req.body.uptimeHours ?? existing?.uptimeHours ?? 0,
     };
 
     saveADComputer(comp);
-    res.status(201).json(comp);
+    res.status(201).json({ ...comp, success: true, computer: comp });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to add workstation' });
   }
@@ -1616,22 +1632,28 @@ app.put('/api/ad-computers/:id', async (req, res) => {
     const explicitIp = req.body.ipAddress !== undefined ? String(req.body.ipAddress).trim() : existing.ipAddress;
     const settings = getAppSettings();
     const probe = await resolveAndProbeHost(updatedName, explicitIp, settings.defaultGlobalDomain);
+    const osVal = req.body.osName || req.body.operatingSystem || existing.osName || existing.operatingSystem || 'Windows 11 Pro';
+    const dnsVal = req.body.fqdn || req.body.dnsHostName || probe.dnsHostName || existing.dnsHostName || existing.fqdn;
+    const isAgentInstalled = existing.agentInstalled || existing.agentStatus === 'Installed';
 
     const updated: ADComputer = {
       ...existing,
       ...req.body,
       id: existing.id,
       name: updatedName,
+      fqdn: dnsVal,
+      dnsHostName: dnsVal,
+      osName: osVal,
+      operatingSystem: osVal,
       ipAddress: explicitIp || probe.ipAddress,
-      dnsHostName: req.body.dnsHostName || probe.dnsHostName || existing.dnsHostName,
-      status: existing.agentInstalled && probe.reachable
+      status: isAgentInstalled && probe.reachable
         ? 'AgentConnected'
         : (probe.reachable ? 'Online' : 'Offline'),
       pingMs: probe.latencyMs,
     };
 
     saveADComputer(updated);
-    res.json(updated);
+    res.json({ ...updated, success: true, computer: updated });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to update workstation' });
   }
@@ -1907,32 +1929,53 @@ app.post('/api/ad-computers/sync', async (req, res) => {
 
 app.post('/api/ad-computers/ping', async (req, res) => {
   try {
-    const { machineNames } = req.body;
-    if (!Array.isArray(machineNames) || machineNames.length === 0) {
-      return res.status(400).json({ error: 'machineNames array is required' });
+    const rawNames = req.body.machineNames || req.body.computerNames;
+    const rawIds = req.body.computerIds;
+    const allComputers = getAllADComputers();
+
+    let targetNames: string[] = [];
+    if (Array.isArray(rawNames) && rawNames.length > 0) {
+      targetNames = rawNames.map((n: any) => String(n).trim()).filter(Boolean);
+    } else if (Array.isArray(rawIds) && rawIds.length > 0) {
+      targetNames = allComputers
+        .filter((c) => rawIds.includes(c.id))
+        .map((c) => c.name);
+    } else {
+      targetNames = allComputers.map((c) => c.name);
+    }
+
+    if (targetNames.length === 0) {
+      return res.json({ success: true, computers: allComputers, results: [], resultsByHost: {} });
     }
 
     const settings = getAppSettings();
-    const results: Record<string, { reachable: boolean; latencyMs?: number; status: string; ipAddress?: string }> = {};
-    const allComputers = getAllADComputers();
+    const resultsByHost: Record<string, { reachable: boolean; latencyMs?: number; status: string; ipAddress?: string }> = {};
+    const resultsList: Array<{ name: string; reachable: boolean; latencyMs?: number; status: string; ipAddress?: string }> = [];
 
-    for (const name of machineNames) {
+    for (const name of targetNames) {
       const comp = allComputers.find((c) => c.name.toLowerCase() === name.toLowerCase());
-      const explicitIp = comp && comp.ipAddress && comp.ipAddress !== 'Unresolved' ? comp.ipAddress : undefined;
+      const explicitIp =
+        comp && comp.ipAddress && !comp.ipAddress.toLowerCase().startsWith('unresolved')
+          ? comp.ipAddress
+          : undefined;
       const probe = await resolveAndProbeHost(name, explicitIp, settings.defaultGlobalDomain);
 
+      const isAgentInstalled = comp?.agentInstalled || comp?.agentStatus === 'Installed';
       const newStatus = probe.reachable
-        ? comp?.agentInstalled
+        ? isAgentInstalled
           ? 'AgentConnected'
           : 'Online'
         : 'Offline';
 
-      results[name] = {
+      const entry = {
+        name,
         reachable: probe.reachable,
         latencyMs: probe.latencyMs,
-        status: newStatus,
+        status: probe.reachable ? 'Online' : 'Offline',
         ipAddress: probe.ipAddress,
       };
+      resultsByHost[name] = entry;
+      resultsList.push(entry);
 
       if (comp) {
         comp.status = newStatus;
@@ -1947,7 +1990,12 @@ app.post('/api/ad-computers/ping', async (req, res) => {
       }
     }
 
-    res.json({ success: true, results });
+    res.json({
+      success: true,
+      computers: getAllADComputers(),
+      results: resultsList,
+      resultsByHost,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Error probing workstation reachability' });
   }
@@ -1957,7 +2005,7 @@ app.post('/api/ad-computers/bulk-import', async (req, res) => {
   try {
     const { computerNames, computers, domain, ouPath, customerProfileId } = req.body;
     const settings = getAppSettings();
-    const targetDomain = domain || settings.defaultGlobalDomain || '';
+    const targetDomain = domain || settings.defaultGlobalDomain || 'corp.local';
     const targetOu = ouPath || settings.adLdapConfig?.computerSearchOu || settings.adLdapConfig?.baseDn || 'CN=Computers';
     const targetCustomer = customerProfileId ?? (getAllCustomers()[0]?.id || '');
 
@@ -1965,12 +2013,12 @@ app.post('/api/ad-computers/bulk-import', async (req, res) => {
     const updated: ADComputer[] = [];
     const existing = getAllADComputers();
 
-    // Support structured objects array (e.g. from PowerShell AD Sync Bridge) OR string lines ("HOSTNAME" or "HOSTNAME, IP, OS, OU")
     const entriesToProcess: Array<{
       name: string;
       ipAddress?: string;
       dnsHostName?: string;
       operatingSystem?: string;
+      osBuild?: string;
       ouPath?: string;
       description?: string;
     }> = [];
@@ -1981,8 +2029,9 @@ app.post('/api/ad-computers/bulk-import', async (req, res) => {
           entriesToProcess.push({
             name: String(item.name).trim().toUpperCase(),
             ipAddress: item.ipAddress ? String(item.ipAddress).trim() : undefined,
-            dnsHostName: item.dnsHostName ? String(item.dnsHostName).trim() : undefined,
-            operatingSystem: item.operatingSystem ? String(item.operatingSystem).trim() : undefined,
+            dnsHostName: (item.dnsHostName || item.fqdn) ? String(item.dnsHostName || item.fqdn).trim() : undefined,
+            operatingSystem: (item.operatingSystem || item.osName) ? String(item.operatingSystem || item.osName).trim() : undefined,
+            osBuild: item.osBuild ? String(item.osBuild).trim() : undefined,
             ouPath: item.ouPath ? String(item.ouPath).trim() : undefined,
             description: item.description ? String(item.description).trim() : undefined,
           });
@@ -2016,17 +2065,24 @@ app.post('/api/ad-computers/bulk-import', async (req, res) => {
       if (!item.name) continue;
       const probe = await resolveAndProbeHost(item.name, item.ipAddress, targetDomain);
       const found = existing.find((c) => c.name.toLowerCase() === item.name.toLowerCase());
+      const osVal = item.operatingSystem || found?.osName || found?.operatingSystem || 'Windows 11 Pro';
+      const dnsVal = item.dnsHostName || probe.dnsHostName || `${item.name.toLowerCase()}.${targetDomain}`;
 
       if (found) {
         if (item.ipAddress || probe.ipAddress !== 'Unresolved') {
           found.ipAddress = item.ipAddress || probe.ipAddress;
         }
-        if (item.dnsHostName) found.dnsHostName = item.dnsHostName;
-        if (item.operatingSystem) found.operatingSystem = item.operatingSystem;
+        found.fqdn = dnsVal;
+        found.dnsHostName = dnsVal;
+        found.domain = targetDomain;
+        found.osName = osVal;
+        found.operatingSystem = osVal;
+        if (item.osBuild) found.osBuild = item.osBuild;
         if (item.ouPath) found.ouPath = item.ouPath;
         if (item.description) found.description = item.description;
         if (targetCustomer) found.customerProfileId = targetCustomer;
-        found.status = found.agentInstalled && probe.reachable ? 'AgentConnected' : (probe.reachable ? 'Online' : 'Offline');
+        const isAgentInstalled = found.agentInstalled || found.agentStatus === 'Installed';
+        found.status = isAgentInstalled && probe.reachable ? 'AgentConnected' : (probe.reachable ? 'Online' : 'Offline');
         found.pingMs = probe.latencyMs;
         saveADComputer(found);
         updated.push(found);
@@ -2036,14 +2092,19 @@ app.post('/api/ad-computers/bulk-import', async (req, res) => {
       const newComp: ADComputer = {
         id: `comp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         name: item.name,
-        dnsHostName: item.dnsHostName || probe.dnsHostName,
-        operatingSystem: item.operatingSystem || 'Windows 11 Pro',
+        fqdn: dnsVal,
+        dnsHostName: dnsVal,
+        domain: targetDomain,
+        osName: osVal,
+        osBuild: item.osBuild || '22631',
+        operatingSystem: osVal,
         ouPath: item.ouPath || targetOu,
         ipAddress: item.ipAddress || probe.ipAddress,
         status: probe.reachable ? 'Online' : 'Offline',
         pingMs: probe.latencyMs,
         lastSeen: new Date().toISOString(),
         agentInstalled: false,
+        agentStatus: 'Not Installed',
         installedPackageIds: [],
         customerProfileId: targetCustomer,
         description: item.description || 'Added to workstation inventory',
@@ -2053,11 +2114,14 @@ app.post('/api/ad-computers/bulk-import', async (req, res) => {
       imported.push(newComp);
     }
 
+    const allNow = getAllADComputers();
     res.json({
       success: true,
+      message: `Processed ${imported.length + updated.length} workstation(s): ${imported.length} added, ${updated.length} updated.`,
       importedCount: imported.length,
       updatedCount: updated.length,
-      computers: [...imported, ...updated],
+      computers: allNow,
+      importedComputers: [...imported, ...updated],
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Error importing workstations' });
@@ -2067,43 +2131,85 @@ app.post('/api/ad-computers/bulk-import', async (req, res) => {
 // Deploy FDIM Client Agent to one or more AD Computers
 app.post('/api/ad-computers/deploy-agent', async (req, res) => {
   try {
-    const { machineNames, serverUrl, adminUsername, transport } = req.body;
-    if (!Array.isArray(machineNames) || machineNames.length === 0) {
-      return res.status(400).json({ error: 'machineNames array is required' });
+    const { machineNames, computerNames, computerIds, serverUrl, adminUsername, adminPassword, transport } = req.body;
+    const allComputers = getAllADComputers();
+
+    // Resolve target computers from computerIds OR machineNames OR computerNames
+    const targetMachines: Array<{ id: string; name: string; comp?: ADComputer }> = [];
+
+    if (Array.isArray(computerIds) && computerIds.length > 0) {
+      for (const id of computerIds) {
+        const comp = allComputers.find((c) => c.id === id || c.name.toLowerCase() === String(id).toLowerCase());
+        if (comp) {
+          targetMachines.push({ id: comp.id, name: comp.name, comp });
+        }
+      }
+    }
+
+    const rawNames = Array.isArray(machineNames) ? machineNames : Array.isArray(computerNames) ? computerNames : [];
+    if (targetMachines.length === 0 && rawNames.length > 0) {
+      for (const rawName of rawNames) {
+        const clean = String(rawName).trim().toUpperCase();
+        if (!clean) continue;
+        const comp = allComputers.find((c) => c.name.toLowerCase() === clean.toLowerCase());
+        targetMachines.push({
+          id: comp?.id || `target-${clean}`,
+          name: comp?.name || clean,
+          comp,
+        });
+      }
+    }
+
+    if (targetMachines.length === 0) {
+      return res.status(400).json({ error: 'At least one target workstation (computerIds or machineNames) is required' });
     }
 
     const settings = getAppSettings();
     const effectiveServerUrl = (serverUrl || settings.agentConfig?.serverUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
-    const allComputers = getAllADComputers();
+    const selectedTransport = String(transport || 'WinRM');
+
     const results: Array<{
+      id: string;
+      name: string;
+      fqdn: string;
       machineName: string;
       ipAddress: string;
       reachable: boolean;
+      pingMs: number | null;
+      openPort?: number;
       winrmOpen: boolean;
       smbOpen: boolean;
+      wmiOpen: boolean;
       status: 'queued_and_ready' | 'unreachable_queued';
+      detail: string;
       message: string;
     }> = [];
 
-    for (const rawName of machineNames) {
-      const comp = allComputers.find((c) => c.name.toLowerCase() === String(rawName).toLowerCase());
-      const explicitIp = comp && comp.ipAddress && comp.ipAddress !== 'Unresolved' ? comp.ipAddress : undefined;
+    for (const target of targetMachines) {
+      const comp = target.comp;
+      const rawName = target.name;
+      const explicitIp =
+        comp && comp.ipAddress && !comp.ipAddress.toLowerCase().startsWith('unresolved')
+          ? comp.ipAddress
+          : undefined;
       const probe = await resolveAndProbeHost(rawName, explicitIp, settings.defaultGlobalDomain);
 
       const winrmOpen = probe.openPorts.includes(5985) || probe.openPorts.includes(5986);
       const smbOpen = probe.openPorts.includes(445);
+      const wmiOpen = probe.openPorts.includes(135);
+      const openPort = probe.openPorts[0];
 
       // Queue an Agent Bootstrap task for tracking
       const existingTasks = getQueuedTasksForMachine(rawName);
-      if (!existingTasks.some((t) => t.title.includes('Deploy FDIM Client Agent'))) {
+      if (!existingTasks.some((t) => (t.title || '').includes('Deploy FDIM Client Agent'))) {
         saveQueuedTask({
           id: `task-agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
           machineName: String(rawName).toUpperCase(),
           taskType: 'CustomScript',
-          title: 'Deploy FDIM Client Agent (Scheduled Task Bootstrap)',
+          title: `Deploy FDIM Client Agent (${selectedTransport} Bootstrap)`,
           status: 'queued',
           payload: {
-            customScript: `Invoke-RestMethod -Uri "${effectiveServerUrl}/api/agent/script/installer?serverUrl=${encodeURIComponent(effectiveServerUrl)}" | Invoke-Expression`,
+            customScript: `Invoke-RestMethod -Uri "${effectiveServerUrl}/api/agent/script/installer?serverUrl=${encodeURIComponent(effectiveServerUrl)}" -UseBasicParsing | Invoke-Expression`,
           },
           executionMode: 'service_account',
           serviceAccount: adminUsername || settings.runnerServiceAccount?.username || 'Administrator',
@@ -2116,58 +2222,153 @@ app.post('/api/ad-computers/deploy-agent', async (req, res) => {
 
       if (comp) {
         if (probe.ipAddress !== 'Unresolved') comp.ipAddress = probe.ipAddress;
-        comp.status = probe.reachable ? (comp.agentInstalled ? 'AgentConnected' : 'Online') : 'Offline';
+        const isAgentInstalled = comp.agentInstalled || comp.agentStatus === 'Installed';
+        comp.status = probe.reachable ? (isAgentInstalled ? 'AgentConnected' : 'Online') : 'Offline';
         comp.pingMs = probe.latencyMs;
         saveADComputer(comp);
       }
 
+      const detailText = probe.reachable
+        ? winrmOpen
+          ? 'Online — WinRM (5985/5986) Open & Ready'
+          : smbOpen
+          ? 'Online — SMB (445) Open & Ready'
+          : wmiOpen
+          ? 'Online — WMI/RPC (135) Open & Ready'
+          : 'Online — Run PowerShell Push Script from Jump Host'
+        : 'Queued — Run PowerShell Push Script from Jump Host / LAN';
+
       results.push({
+        id: target.id,
+        name: String(rawName).toUpperCase(),
+        fqdn: comp?.fqdn || comp?.dnsHostName || probe.dnsHostName || String(rawName).toLowerCase(),
         machineName: String(rawName).toUpperCase(),
-        ipAddress: probe.ipAddress,
+        ipAddress: explicitIp || probe.ipAddress,
         reachable: probe.reachable,
+        pingMs: probe.latencyMs ?? null,
+        openPort,
         winrmOpen,
         smbOpen,
+        wmiOpen,
         status: probe.reachable ? 'queued_and_ready' : 'unreachable_queued',
-        message: probe.reachable
-          ? `Host ${rawName} (${probe.ipAddress}) is online (${probe.latencyMs}ms). ${
-              winrmOpen ? 'WinRM port open.' : smbOpen ? 'SMB port 445 open.' : 'Run the PowerShell push command from a domain management host to complete installation.'
-            }`
-          : `Host ${rawName} (${probe.ipAddress}) is not directly reachable from this server container. Queued deployment task & generated PowerShell remote push script.`,
+        detail: detailText,
+        message: detailText,
       });
     }
 
-    const targetsList = machineNames.map((n: string) => `"${String(n).trim()}"`).join(', ');
-    const credUser = adminUsername || settings.runnerServiceAccount?.username || `${settings.adLdapConfig?.domain || 'DOMAIN'}\\Administrator`;
-    const useSslFlag = transport === 'winrm_https' ? ' -UseSSL' : '';
+    // Prefer target IP if resolved so deployment works even without internal DNS resolution
+    const targetAddresses = results.map((r) =>
+      r.ipAddress && !r.ipAddress.toLowerCase().startsWith('unresolved') ? r.ipAddress : r.name
+    );
+    const targetsList = targetAddresses.map((n) => `"${String(n).trim()}"`).join(', ');
+    const targetNamesSummary = results.map((r) => `${r.name} (${r.ipAddress})`).join(', ');
+    const credUser =
+      adminUsername ||
+      settings.runnerServiceAccount?.username ||
+      `${settings.adLdapConfig?.domain || 'DOMAIN'}\\Administrator`;
 
-    const remotePushScript = `# ==============================================================================
-# FDIM Client Agent Remote Push Script (WinRM / PowerShell Remoting)
-# Targets: ${machineNames.join(', ')}
+    const bootstrapOneLiner = `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-RestMethod -Uri "${effectiveServerUrl}/api/agent/script/installer?serverUrl=${encodeURIComponent(effectiveServerUrl)}" -UseBasicParsing | Invoke-Expression`;
+
+    const credSnippet = adminPassword
+      ? `$SecPass = ConvertTo-SecureString "${String(adminPassword).replace(/"/g, '`"')}" -AsPlainText -Force\n$Cred = New-Object System.Management.Automation.PSCredential("${credUser}", $SecPass)`
+      : `$Cred = Get-Credential -UserName "${credUser}" -Message "Enter Domain Admin credentials for FDIM Agent deployment"`;
+
+    let remotePushScript = '';
+    if (selectedTransport.toUpperCase() === 'WMI') {
+      remotePushScript = `# ==============================================================================
+# FDIM Client Agent Remote Push Script — WMI / CIM Process Call (TCP 135 / DCOM)
+# Targets: ${targetNamesSummary}
 # Server:  ${effectiveServerUrl}
 # ==============================================================================
 $Targets = @(${targetsList})
 $ServerUrl = "${effectiveServerUrl}"
-$Cred = Get-Credential -UserName "${credUser}" -Message "Enter Domain Admin credentials for remote Agent deployment"
+${credSnippet}
 
-foreach ($Computer in $Targets) {
-    Write-Host "[*] Deploying FDIM Client Agent to $Computer..." -ForegroundColor Cyan
+$BootstrapCmd = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-RestMethod -Uri '$ServerUrl/api/agent/script/installer?serverUrl=$([uri]::EscapeDataString($ServerUrl))' -UseBasicParsing | Invoke-Expression"""
+
+foreach ($Target in $Targets) {
+    Write-Host "[*] Deploying FDIM Client Agent to $Target via WMI/CIM (Win32_Process)..." -ForegroundColor Cyan
     try {
-        Invoke-Command -ComputerName $Computer -Credential $Cred${useSslFlag} -ScriptBlock {
+        $CimOpt = New-CimSessionOption -Protocol Dcom
+        $Session = New-CimSession -ComputerName $Target -Credential $Cred -SessionOption $CimOpt -ErrorAction Stop
+        $Result = Invoke-CimMethod -CimSession $Session -ClassName Win32_Process -MethodName Create -Arguments @{
+            CommandLine = $BootstrapCmd
+        } -ErrorAction Stop
+        if ($Result.ReturnValue -eq 0) {
+            Write-Host "[OK] Agent installer launched on $Target (PID: $($Result.ProcessId))!" -ForegroundColor Green
+        } else {
+            Write-Warning "[!] Win32_Process.Create returned code $($Result.ReturnValue) on $Target"
+        }
+        Remove-CimSession $Session -ErrorAction SilentlyContinue
+    } catch {
+        Write-Warning "[!] WMI/CIM failed on $Target: $_"
+    }
+}`;
+    } else if (selectedTransport.toUpperCase() === 'SMB') {
+      remotePushScript = `# ==============================================================================
+# FDIM Client Agent Remote Push Script — SMB Admin$ Share + Scheduled Task (TCP 445)
+# Targets: ${targetNamesSummary}
+# Server:  ${effectiveServerUrl}
+# ==============================================================================
+$Targets = @(${targetsList})
+$ServerUrl = "${effectiveServerUrl}"
+${credSnippet}
+
+# Download installer script once on the admin jump host
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$InstallerContent = Invoke-RestMethod -Uri "$ServerUrl/api/agent/script/installer?serverUrl=$([uri]::EscapeDataString($ServerUrl))" -UseBasicParsing
+
+foreach ($Target in $Targets) {
+    Write-Host "[*] Staging FDIM Agent via SMB ADMIN$ on $Target..." -ForegroundColor Cyan
+    try {
+        New-PSDrive -Name "FDIMSMB" -PSProvider FileSystem -Root "\\\\$Target\\ADMIN$\\Temp" -Credential $Cred -ErrorAction Stop | Out-Null
+        Set-Content -Path "FDIMSMB:\\Install-FDIMAgent.ps1" -Value $InstallerContent -Encoding UTF8 -Force
+        Remove-PSDrive -Name "FDIMSMB" -ErrorAction SilentlyContinue
+
+        $PlainPass = $Cred.GetNetworkCredential().Password
+        schtasks.exe /Create /S $Target /U "$($Cred.UserName)" /P "$PlainPass" /RU "SYSTEM" /SC ONCE /ST 00:00 /TN "FDIM-Agent-Bootstrap" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\Install-FDIMAgent.ps1" /RL HIGHEST /F | Out-Null
+        schtasks.exe /Run /S $Target /U "$($Cred.UserName)" /P "$PlainPass" /TN "FDIM-Agent-Bootstrap" | Out-Null
+        Write-Host "[OK] FDIM Agent staged and executed as SYSTEM on $Target!" -ForegroundColor Green
+    } catch {
+        Remove-PSDrive -Name "FDIMSMB" -ErrorAction SilentlyContinue
+        Write-Warning "[!] SMB deployment failed on $Target: $_"
+    }
+}`;
+    } else {
+      const useSslFlag = selectedTransport === 'winrm_https' ? ' -UseSSL' : '';
+      remotePushScript = `# ==============================================================================
+# FDIM Client Agent Remote Push Script — WinRM / PowerShell Remoting (TCP 5985/5986)
+# Targets: ${targetNamesSummary}
+# Server:  ${effectiveServerUrl}
+# ==============================================================================
+$Targets = @(${targetsList})
+$ServerUrl = "${effectiveServerUrl}"
+${credSnippet}
+
+foreach ($Target in $Targets) {
+    Write-Host "[*] Deploying FDIM Client Agent to $Target via WinRM..." -ForegroundColor Cyan
+    try {
+        Invoke-Command -ComputerName $Target -Credential $Cred${useSslFlag} -ScriptBlock {
             param($Url)
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             $installer = Invoke-RestMethod -Uri "$Url/api/agent/script/installer?serverUrl=$([uri]::EscapeDataString($Url))" -UseBasicParsing
             Invoke-Expression $installer
         } -ArgumentList $ServerUrl -ErrorAction Stop
-        Write-Host "[OK] FDIM Agent installed and heartbeat triggered on $Computer!" -ForegroundColor Green
+        Write-Host "[OK] FDIM Agent installed and heartbeat triggered on $Target!" -ForegroundColor Green
     } catch {
-        Write-Warning "[!] Failed on $Computer: $_"
+        Write-Warning "[!] WinRM failed on $Target: $_"
     }
 }`;
+    }
 
+    const reachableCount = results.filter((r) => r.reachable).length;
     res.json({
       success: true,
+      message: `Prepared ${selectedTransport} Agent Deployment for ${results.length} workstation(s) (${reachableCount} directly reachable from server). Copy or run the PowerShell script below to install the agent.`,
       serverUrl: effectiveServerUrl,
+      computers: getAllADComputers(),
       results,
+      bootstrapOneLiner,
       remotePushScript,
     });
   } catch (err: any) {
@@ -2316,8 +2517,11 @@ app.post('/api/agent/heartbeat', (req, res) => {
     machineName,
     domain,
     os,
+    osName,
     ip,
+    ipAddress,
     currentUser,
+    loggedInUser,
     uptimeHours,
     installedPackages,
     agentVersion,
@@ -2326,6 +2530,10 @@ app.post('/api/agent/heartbeat', (req, res) => {
   if (!machineName) {
     return res.status(400).json({ error: 'machineName is required' });
   }
+
+  const effectiveIp = ip || ipAddress;
+  const effectiveOs = os || osName;
+  const effectiveUser = currentUser || loggedInUser;
 
   const cleanName = machineName.toUpperCase().trim();
   const now = new Date().toISOString();
@@ -2339,14 +2547,14 @@ app.post('/api/agent/heartbeat', (req, res) => {
     comp.agentStatus = 'Installed';
     comp.lastAgentHeartbeat = now;
     if (agentVersion) comp.agentVersion = agentVersion;
-    if (ip) comp.ipAddress = ip;
-    if (os) {
-      comp.operatingSystem = os;
-      comp.osName = os;
+    if (effectiveIp) comp.ipAddress = effectiveIp;
+    if (effectiveOs) {
+      comp.operatingSystem = effectiveOs;
+      comp.osName = effectiveOs;
     }
-    if (currentUser) {
-      comp.currentUser = currentUser;
-      comp.loggedInUser = currentUser;
+    if (effectiveUser) {
+      comp.currentUser = effectiveUser;
+      comp.loggedInUser = effectiveUser;
     }
     if (typeof uptimeHours === 'number') comp.uptimeHours = uptimeHours;
     if (Array.isArray(installedPackages) && installedPackages.length > 0) {
