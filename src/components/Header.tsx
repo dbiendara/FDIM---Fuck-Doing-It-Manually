@@ -150,6 +150,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <span
                   className="font-extrabold text-xl tracking-tight transition-colors cursor-pointer select-none"
                   onClick={() => setActiveTab('wizard')}
+                  title={`FDIM (${getFdimExpansion(showProfanity)}) • Zero-Touch Workstation Provisioning`}
                   style={{
                     background: `linear-gradient(to right, ${primaryColor}, ${secondaryColor})`,
                     WebkitBackgroundClip: 'text',
@@ -158,23 +159,7 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   FDIM
                 </span>
-                <button
-                  type="button"
-                  onClick={onToggleProfanity}
-                  title={
-                    showProfanity
-                      ? "Click to switch to Corporate Safe-For-Work mode ('Forget Doing It Manually')"
-                      : "Click to switch to Uncensored mode ('Fuck Doing It Manually')"
-                  }
-                  className={`text-xs px-2.5 py-0.5 rounded-full font-semibold font-mono tracking-wider transition-all flex items-center space-x-1.5 cursor-pointer hover:scale-105 select-none ${
-                    showProfanity
-                      ? 'text-amber-300 bg-amber-950/80 border border-amber-800/80 hover:bg-amber-900/60'
-                      : 'text-emerald-300 bg-emerald-950/80 border border-emerald-800/80 hover:bg-emerald-900/60'
-                  }`}
-                >
-                  <span>{getFdimExpansion(showProfanity)}</span>
-                  <span className="text-[11px]">{showProfanity ? '⚡' : '🛡️'}</span>
-                </button>
+                <span className="text-[11px] font-mono text-slate-500 uppercase tracking-widest hidden sm:inline">Suite</span>
               </div>
               <p className="text-xs text-slate-400 hidden xl:block">
                 {brandName ? `${brandName} • ` : ''}Zero-Touch Workstation Provisioning Suite
@@ -453,6 +438,36 @@ export const Header: React.FC<HeaderProps> = ({
                         </p>
                       </div>
                     </button>
+
+                    {onToggleProfanity && (
+                      <div className="pt-2 mt-1 border-t border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onToggleProfanity();
+                            setIsDropdownOpen(false);
+                          }}
+                          className="w-full flex items-center justify-between p-2 rounded-xl hover:bg-slate-800 text-left transition-colors cursor-pointer text-xs"
+                          title="Toggle between Uncensored IT mode and Corporate Safe-For-Work mode"
+                        >
+                          <div className="flex items-center space-x-2">
+                            <span className="text-sm">{showProfanity ? '⚡' : '🛡️'}</span>
+                            <span className="text-slate-300 font-medium">
+                              {showProfanity ? 'Mode: Uncensored' : 'Mode: Corporate SFW'}
+                            </span>
+                          </div>
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold ${
+                              showProfanity
+                                ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                                : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                            }`}
+                          >
+                            {showProfanity ? 'RAW' : 'SFW'}
+                          </span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

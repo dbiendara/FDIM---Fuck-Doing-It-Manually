@@ -242,29 +242,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
 
-        {/* Navigation Tabs Bar with Horizontal Scroll Support */}
-        <div className="border-b border-slate-800 bg-slate-950/40 relative">
-          <div className="flex items-center overflow-x-auto scrollbar-thin scrollbar-thumb-slate-700/80 scrollbar-track-slate-900/40 px-3 sm:px-5 text-xs font-semibold gap-1 scroll-smooth">
+        {/* Navigation Tabs Bar */}
+        <div className="border-b border-slate-800 bg-slate-950/60 p-2 sm:px-5">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
             <button
               type="button"
               onClick={() => setActiveTab('general')}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`py-2 px-3 rounded-lg flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'general'
-                  ? 'border-cyan-500 text-cyan-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold shadow-sm'
+                  : 'bg-slate-900/60 border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
-              <Globe className="w-4 h-4 shrink-0" />
+              <Globe className="w-4 h-4 shrink-0 text-cyan-400" />
               <span>Global Domain</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('branding')}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`py-2 px-3 rounded-lg flex items-center space-x-1.5 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'branding'
-                  ? 'border-cyan-500 text-cyan-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold shadow-sm'
+                  : 'bg-slate-900/60 border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
               <Palette className="w-4 h-4 text-pink-400 shrink-0" />
@@ -274,36 +274,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('sqlite')}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`py-2 px-3 rounded-lg flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'sqlite'
-                  ? 'border-cyan-500 text-cyan-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold shadow-sm'
+                  : 'bg-slate-900/60 border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
-              <Database className="w-4 h-4 shrink-0" />
+              <Database className="w-4 h-4 shrink-0 text-cyan-400" />
               <span>SQLite Database</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('auth')}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`py-2 px-3 rounded-lg flex items-center space-x-1.5 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'auth'
-                  ? 'border-cyan-500 text-cyan-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold shadow-sm'
+                  : 'bg-slate-900/60 border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
-              <Shield className="w-4 h-4 shrink-0" />
+              <Shield className="w-4 h-4 shrink-0 text-cyan-400" />
               <span>AD / Keycloak</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('runner')}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`py-2 px-3 rounded-lg flex items-center space-x-1.5 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'runner'
-                  ? 'border-cyan-500 text-cyan-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold shadow-sm'
+                  : 'bg-slate-900/60 border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
               <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -313,10 +313,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('proxmox')}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`py-2 px-3 rounded-lg flex items-center space-x-1.5 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'proxmox'
-                  ? 'border-cyan-500 text-cyan-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold shadow-sm'
+                  : 'bg-slate-900/60 border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
               <Box className="w-4 h-4 text-purple-400 shrink-0" />
@@ -326,10 +326,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('agent')}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`py-2 px-3 rounded-lg flex items-center space-x-1.5 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'agent'
-                  ? 'border-cyan-500 text-cyan-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold shadow-sm'
+                  : 'bg-slate-900/60 border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
               <Radio className="w-4 h-4 text-blue-400 shrink-0" />
@@ -339,13 +339,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('docker')}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`py-2 px-3 rounded-lg flex items-center space-x-1.5 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'docker'
-                  ? 'border-cyan-500 text-cyan-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-bold shadow-sm'
+                  : 'bg-slate-900/60 border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
-              <Server className="w-4 h-4 shrink-0" />
+              <Server className="w-4 h-4 shrink-0 text-cyan-400" />
               <span>Docker & SSL</span>
             </button>
           </div>

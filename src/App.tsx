@@ -177,6 +177,7 @@ export default function App() {
 
   // Initial data loading
   useEffect(() => {
+    document.title = 'FDIM - Zero-Touch Workstation Provisioning Suite';
     Promise.all([
       fetch('/api/packages').then((r) => r.json()),
       fetch('/api/profiles').then((r) => r.json()),
