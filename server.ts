@@ -34,6 +34,7 @@ import {
   getAllADComputers,
   getADComputerByName,
   saveADComputer,
+  saveADComputersBatch,
   deleteADComputer,
   getAllQueuedTasks,
   getQueuedTasksForMachine,
@@ -1685,7 +1686,6 @@ async function queryActiveDirectoryComputers(options: {
         }
         existingComp.pingMs = probe.latencyMs;
         if (probe.reachable) existingComp.lastSeen = nowIso;
-        saveADComputer(existingComp);
         updated.push(existingComp);
       } else {
         const newComp: ADComputer = {
@@ -1704,10 +1704,12 @@ async function queryActiveDirectoryComputers(options: {
           description: desc || `Synced from Active Directory (${ouPath})`,
           uptimeHours: 0,
         };
-        saveADComputer(newComp);
         discovered.push(newComp);
       }
     }
+
+    // Atomic batch save in single SQLite transaction to avoid thrashing disk watchers
+    saveADComputersBatch([...discovered, ...updated]);
 
     return {
       success: true,
@@ -2275,7 +2277,6 @@ app.post('/api/ad-computers/bulk-import', async (req, res) => {
         const isAgentInstalled = found.agentInstalled || found.agentStatus === 'Installed';
         found.status = isAgentInstalled && probe.reachable ? 'AgentConnected' : (probe.reachable ? 'Online' : 'Offline');
         found.pingMs = probe.latencyMs;
-        saveADComputer(found);
         updated.push(found);
         continue;
       }
@@ -2301,9 +2302,10 @@ app.post('/api/ad-computers/bulk-import', async (req, res) => {
         description: item.description || 'Added to workstation inventory',
         uptimeHours: 0,
       };
-      saveADComputer(newComp);
       imported.push(newComp);
     }
+
+    saveADComputersBatch([...imported, ...updated]);
 
     const allNow = getAllADComputers();
     res.json({
@@ -4450,7 +4452,21 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        watch: {
+          ignored: [
+            '**/data/**',
+            '**/*.sqlite',
+            '**/*.sqlite-*',
+            '**/*.db',
+            '**/*.db-*',
+            '**/.aistudio/**',
+            '**/node_modules/**',
+            '**/.git/**',
+          ],
+        },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

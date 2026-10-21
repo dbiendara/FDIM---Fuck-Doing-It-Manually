@@ -487,6 +487,31 @@ export function saveADComputer(computer: ADComputer): ADComputer {
   return computer;
 }
 
+export function saveADComputersBatch(computers: ADComputer[]): ADComputer[] {
+  if (!computers || computers.length === 0) return [];
+  const checkStmt = db.prepare('SELECT id FROM ad_computers WHERE id = ? OR LOWER(name) = LOWER(?)');
+  const updateStmt = db.prepare('UPDATE ad_computers SET data = ?, updated_at = ? WHERE id = ?');
+  const insertStmt = db.prepare('INSERT INTO ad_computers (id, name, data, updated_at) VALUES (?, ?, ?, ?)');
+  const now = new Date().toISOString();
+
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    for (const comp of computers) {
+      const existing = checkStmt.get(comp.id, comp.name) as { id: string } | undefined;
+      if (existing) {
+        updateStmt.run(JSON.stringify(comp), now, existing.id);
+      } else {
+        insertStmt.run(comp.id, comp.name, JSON.stringify(comp), now);
+      }
+    }
+    db.exec('COMMIT;');
+  } catch (err) {
+    db.exec('ROLLBACK;');
+    throw err;
+  }
+  return computers;
+}
+
 export function deleteADComputer(id: string): boolean {
   const info = db.prepare('DELETE FROM ad_computers WHERE id = ?').run(id);
   return info.changes > 0;

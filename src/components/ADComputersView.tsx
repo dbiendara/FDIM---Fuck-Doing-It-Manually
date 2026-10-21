@@ -177,8 +177,10 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
     }
   };
 
-  const fetchComputers = async () => {
-    setIsLoading(true);
+  const fetchComputers = async (showLoadingState = false) => {
+    if (showLoadingState) {
+      setIsLoading(true);
+    }
     try {
       const res = await fetch('/api/ad-computers');
       const data = await res.json();
@@ -191,7 +193,7 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
   };
 
   useEffect(() => {
-    fetchComputers();
+    fetchComputers(true);
     // Load configured AD defaults from server settings
     fetch('/api/settings')
       .then((r) => r.json())
