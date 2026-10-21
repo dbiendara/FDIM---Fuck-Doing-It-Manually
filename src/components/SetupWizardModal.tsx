@@ -66,6 +66,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
   const [adComputerSearchOu, setAdComputerSearchOu] = useState('');
   const [isTestingAd, setIsTestingAd] = useState(false);
   const [adTestResult, setAdTestResult] = useState<{ success: boolean; message: string; dcHost?: string } | null>(null);
+  const [showBindPassword, setShowBindPassword] = useState(false);
 
   // Step 4: Company Profile & Branding (optional for empty production workspace)
   const [companyName, setCompanyName] = useState('');
@@ -651,20 +652,35 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">Service Account Bind DN</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Service Account / Bind User <span className="text-amber-400 font-normal">(Required for Computer Sync)</span>
+                  </label>
                   <input
                     type="text"
                     value={adBindDn}
                     onChange={(e) => setAdBindDn(e.target.value)}
-                    placeholder="CN=svc_fdim,OU=ServiceAccounts,DC=corp,..."
+                    placeholder="administrator@rzhit.win, RZHIT\administrator, or CN=..."
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono text-[11px]"
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Active Directory rejects anonymous LDAP queries (DSID-0C090A5A). An authenticated user is required.
+                  </p>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">Service Account Password</label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-medium text-slate-300">Service Account Bind Password</label>
+                    <button
+                      type="button"
+                      onClick={() => setShowBindPassword(!showBindPassword)}
+                      className="text-[11px] text-slate-400 hover:text-cyan-400 flex items-center space-x-1"
+                    >
+                      {showBindPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      <span>{showBindPassword ? 'Hide' : 'Show'}</span>
+                    </button>
+                  </div>
                   <input
-                    type="password"
+                    type={showBindPassword ? 'text' : 'password'}
                     value={adBindPassword}
                     onChange={(e) => setAdBindPassword(e.target.value)}
                     placeholder="••••••••••••"

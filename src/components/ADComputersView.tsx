@@ -37,6 +37,12 @@ import {
   Rocket,
   AlertTriangle,
   Download,
+  KeyRound,
+  Lock,
+  Eye,
+  EyeOff,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 interface ADComputersViewProps {
@@ -70,11 +76,25 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
   const [showAdBridgeHelper, setShowAdBridgeHelper] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // Targeted LDAP Discovery modal
+  // Targeted LDAP Discovery modal & LDAP Credentials state
   const [isLdapModalOpen, setIsLdapModalOpen] = useState(false);
   const [targetOu, setTargetOu] = useState('');
   const [specificComputerQuery, setSpecificComputerQuery] = useState('');
   const [targetCustomerForSync, setTargetCustomerForSync] = useState(customers[0]?.id || '');
+  const [ldapServerUrl, setLdapServerUrl] = useState('');
+  const [ldapDomain, setLdapDomain] = useState('');
+  const [ldapBaseDn, setLdapBaseDn] = useState('');
+  const [ldapBindDn, setLdapBindDn] = useState('');
+  const [ldapBindPassword, setLdapBindPassword] = useState('');
+  const [showLdapPassword, setShowLdapPassword] = useState(false);
+  const [showLdapCredsSection, setShowLdapCredsSection] = useState(false);
+  const [isTestingModalLdap, setIsTestingModalLdap] = useState(false);
+  const [modalLdapTestResult, setModalLdapTestResult] = useState<{
+    success?: boolean;
+    message?: string;
+    dcHost?: string;
+    computerCount?: number;
+  } | null>(null);
 
   // Add / Bulk Import modal
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -179,15 +199,28 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
         if (s?.defaultGlobalDomain) {
           setImportDomain(s.defaultGlobalDomain);
         }
+        if (s?.adLdapConfig?.ldapUrl) {
+          setLdapServerUrl(s.adLdapConfig.ldapUrl);
+        }
+        if (s?.adLdapConfig?.domain) {
+          setLdapDomain(s.adLdapConfig.domain);
+        }
+        if (s?.adLdapConfig?.baseDn) {
+          setLdapBaseDn(s.adLdapConfig.baseDn);
+        }
+        if (s?.adLdapConfig?.bindDn) {
+          setLdapBindDn(s.adLdapConfig.bindDn);
+          setDeployAdminUser(s.adLdapConfig.bindDn);
+        }
+        if (s?.adLdapConfig?.bindPassword) {
+          setLdapBindPassword(s.adLdapConfig.bindPassword);
+        }
         if (s?.adLdapConfig?.computerSearchOu) {
           setTargetOu(s.adLdapConfig.computerSearchOu);
           setSingleOu(s.adLdapConfig.computerSearchOu);
         } else if (s?.adLdapConfig?.baseDn) {
           setTargetOu(s.adLdapConfig.baseDn);
           setSingleOu(s.adLdapConfig.baseDn);
-        }
-        if (s?.adLdapConfig?.bindDn) {
-          setDeployAdminUser(s.adLdapConfig.bindDn);
         }
       })
       .catch(() => {});
@@ -203,7 +236,16 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
   }, [customers]);
 
   // Sync AD via real LDAPv3 query
-  const handleSyncAD = async (options?: { ouPath?: string; specificNames?: string[]; customerId?: string }) => {
+  const handleSyncAD = async (options?: {
+    ouPath?: string;
+    specificNames?: string[];
+    customerId?: string;
+    ldapUrl?: string;
+    domain?: string;
+    baseDn?: string;
+    bindDn?: string;
+    bindPassword?: string;
+  }) => {
     setIsSyncing(true);
     setSyncFeedback(null);
     setSyncError(null);
@@ -215,13 +257,18 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
           ouPath: options?.ouPath !== undefined ? options.ouPath : targetOu,
           specificComputerNames: options?.specificNames,
           customerProfileId: options?.customerId || targetCustomerForSync,
+          ldapUrl: options?.ldapUrl || ldapServerUrl || undefined,
+          domain: options?.domain || ldapDomain || undefined,
+          baseDn: options?.baseDn || ldapBaseDn || undefined,
+          bindDn: options?.bindDn || ldapBindDn || undefined,
+          bindPassword: options?.bindPassword !== undefined ? options.bindPassword : ldapBindPassword || undefined,
           discoverNew: true,
         }),
       });
       const data = await res.json();
       if (!res.ok || data.success === false) {
-        setSyncError(data.message || data.ldapError || 'Active Directory LDAP sync failed.');
-        setShowAdBridgeHelper(true);
+        setSyncError(data.message || data.error || data.ldapError || 'Active Directory LDAP sync failed.');
+        setShowLdapCredsSection(true);
       } else {
         setSyncFeedback(data.message || 'Active Directory sync complete.');
         if (Array.isArray(data.discoveredComputers) && data.discoveredComputers.length > 0) {
@@ -231,10 +278,38 @@ export const ADComputersView: React.FC<ADComputersViewProps> = ({
       fetchComputers();
     } catch (err: any) {
       setSyncError(err?.message || 'Failed to connect to Active Directory endpoint.');
-      setShowAdBridgeHelper(true);
+      setShowLdapCredsSection(true);
     } finally {
       setIsSyncing(false);
       setIsLdapModalOpen(false);
+    }
+  };
+
+  // Test LDAP Connection & Authenticated Bind directly from the Discovery Modal
+  const handleTestModalLdap = async () => {
+    setIsTestingModalLdap(true);
+    setModalLdapTestResult(null);
+    try {
+      const res = await fetch('/api/auth/test-ad', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ldapUrl: ldapServerUrl,
+          domain: ldapDomain,
+          baseDn: ldapBaseDn,
+          bindDn: ldapBindDn,
+          bindPassword: ldapBindPassword,
+        }),
+      });
+      const data = await res.json();
+      setModalLdapTestResult(data);
+    } catch (err: any) {
+      setModalLdapTestResult({
+        success: false,
+        message: 'Network error or timeout connecting to Active Directory Domain Controller.',
+      });
+    } finally {
+      setIsTestingModalLdap(false);
     }
   };
 
@@ -844,7 +919,7 @@ foreach ($Target in $Targets) {
           </div>
         )}
 
-        {/* LDAP Error + PowerShell AD Bridge Banner */}
+        {/* LDAP Error + Configure Credentials / PowerShell AD Bridge Banner */}
         {syncError && (
           <div className="mt-4 p-4 rounded-xl bg-amber-950/50 border border-amber-700/80 text-amber-200 text-xs space-y-3">
             <div className="flex items-start justify-between gap-3">
@@ -853,9 +928,24 @@ foreach ($Target in $Targets) {
                 <div>
                   <div className="font-bold text-amber-300">Active Directory Sync Notice</div>
                   <p className="text-amber-200/90 mt-0.5 leading-relaxed">{syncError}</p>
+                  {(syncError.includes('bind') || syncError.includes('DSID-0C090A5A') || syncError.includes('credentials')) && (
+                    <p className="text-[11px] text-cyan-300 mt-1 font-medium">
+                      Windows Server requires an authenticated domain account (anonymous LDAP searches are forbidden by Active Directory policy). Click "Configure LDAP Credentials" below to supply your domain user and password.
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex items-center space-x-2 shrink-0">
+                <button
+                  onClick={() => {
+                    setShowLdapCredsSection(true);
+                    setIsLdapModalOpen(true);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white border border-cyan-500 text-[11px] font-semibold cursor-pointer flex items-center space-x-1.5 shadow-sm"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  <span>Configure LDAP Credentials</span>
+                </button>
                 <button
                   onClick={() => setShowAdBridgeHelper(!showAdBridgeHelper)}
                   className="px-2.5 py-1 rounded-lg bg-amber-900/60 hover:bg-amber-800 text-amber-200 border border-amber-700 text-[11px] font-semibold cursor-pointer"
@@ -1724,10 +1814,10 @@ foreach ($Target in $Targets) {
         </div>
       )}
 
-      {/* Modal: Targeted LDAP Discovery */}
+      {/* Modal: Targeted LDAP Discovery & Connection Credentials */}
       {isLdapModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 my-8">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center space-x-2.5">
                 <SlidersHorizontal className="w-5 h-5 text-cyan-400" />
@@ -1735,26 +1825,146 @@ foreach ($Target in $Targets) {
               </div>
               <button
                 onClick={() => setIsLdapModalOpen(false)}
-                className="text-slate-400 hover:text-white text-xs"
+                className="text-slate-400 hover:text-white text-xs cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
             <p className="text-xs text-slate-400 leading-relaxed">
-              Query a specific Organizational Unit (OU) Distinguished Name or filter for specific computer hostnames via LDAPv3.
+              Query your Windows Server Domain Controller over LDAPv3 to discover computer accounts, hostnames, and operating systems.
             </p>
 
-            <div className="space-y-3">
+            <div className="space-y-3.5">
+              {/* Collapsible Connection & Bind Credentials Section */}
+              <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950/70">
+                <button
+                  type="button"
+                  onClick={() => setShowLdapCredsSection(!showLdapCredsSection)}
+                  className="w-full flex items-center justify-between p-3 text-xs font-semibold text-slate-200 hover:bg-slate-900/80 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center space-x-2 text-cyan-300">
+                    <KeyRound className="w-4 h-4 text-cyan-400" />
+                    <span>Domain Controller & Authenticated Bind Credentials</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5 text-slate-400 text-[11px]">
+                    <span>{showLdapCredsSection ? 'Hide' : 'Configure / Edit'}</span>
+                    {showLdapCredsSection ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </div>
+                </button>
+
+                {showLdapCredsSection && (
+                  <div className="p-3.5 border-t border-slate-800/80 space-y-3 bg-slate-950 text-xs">
+                    <div className="p-2.5 rounded-lg bg-blue-950/40 border border-blue-800/50 text-[11px] text-blue-200/90 leading-relaxed">
+                      <span className="font-semibold text-blue-300">Active Directory Bind Requirement:</span> Windows Server strictly rejects anonymous LDAP searches (DSID-0C090A5A). An authenticated domain account is required.
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-slate-400 mb-1 font-mono text-[11px]">LDAP / LDAPS URL:</label>
+                        <input
+                          type="text"
+                          value={ldapServerUrl}
+                          onChange={(e) => setLdapServerUrl(e.target.value)}
+                          placeholder="ldaps://csdc1.rzhit.win:636"
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-400 mb-1 font-mono text-[11px]">Domain (NetBIOS):</label>
+                        <input
+                          type="text"
+                          value={ldapDomain}
+                          onChange={(e) => setLdapDomain(e.target.value)}
+                          placeholder="RZHIT"
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-white focus:outline-none focus:border-cyan-500 uppercase"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 mb-1 font-mono text-[11px]">Domain Base DN:</label>
+                      <input
+                        type="text"
+                        value={ldapBaseDn}
+                        onChange={(e) => setLdapBaseDn(e.target.value)}
+                        placeholder="DC=rzhit,DC=win"
+                        className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-slate-400 mb-1 font-mono text-[11px]">
+                          Service Account / Bind User:
+                        </label>
+                        <input
+                          type="text"
+                          value={ldapBindDn}
+                          onChange={(e) => setLdapBindDn(e.target.value)}
+                          placeholder="administrator@rzhit.win or RZHIT\administrator"
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-500"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-slate-400 font-mono text-[11px]">Bind Password:</label>
+                          <button
+                            type="button"
+                            onClick={() => setShowLdapPassword(!showLdapPassword)}
+                            className="text-[10px] text-slate-400 hover:text-cyan-400 flex items-center space-x-1"
+                          >
+                            {showLdapPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                            <span>{showLdapPassword ? 'Hide' : 'Show'}</span>
+                          </button>
+                        </div>
+                        <input
+                          type={showLdapPassword ? 'text' : 'password'}
+                          value={ldapBindPassword}
+                          onChange={(e) => setLdapBindPassword(e.target.value)}
+                          placeholder="••••••••••••"
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <button
+                        type="button"
+                        onClick={handleTestModalLdap}
+                        disabled={isTestingModalLdap || !ldapServerUrl}
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isTestingModalLdap ? 'animate-spin' : ''}`} />
+                        <span>{isTestingModalLdap ? 'Testing DC Bind...' : 'Test Connection & Authenticated Bind'}</span>
+                      </button>
+                    </div>
+
+                    {modalLdapTestResult && (
+                      <div
+                        className={`p-2.5 rounded-lg text-xs border ${
+                          modalLdapTestResult.success
+                            ? 'bg-emerald-950/70 border-emerald-800 text-emerald-300'
+                            : 'bg-red-950/70 border-red-800 text-red-300'
+                        }`}
+                      >
+                        {modalLdapTestResult.message}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Target OU & Filters */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Target OU / Search Base DN
+                  Target OU / Computer Search Base (Optional — leave blank for Base DN)
                 </label>
                 <input
                   type="text"
                   value={targetOu}
                   onChange={(e) => setTargetOu(e.target.value)}
-                  placeholder="OU=Workstations,DC=yourdomain,DC=local"
+                  placeholder="OU=Workstations,DC=rzhit,DC=win (or leave blank to search entire domain)"
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
                 />
               </div>
@@ -1767,7 +1977,7 @@ foreach ($Target in $Targets) {
                   type="text"
                   value={specificComputerQuery}
                   onChange={(e) => setSpecificComputerQuery(e.target.value)}
-                  placeholder="e.g. WS-FIN-01, WS-CAD-02 (Leave blank to sync all in OU)"
+                  placeholder="e.g. CSPC01, CSPC02 (Leave blank to sync all computers in OU)"
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
                 />
               </div>
@@ -1775,7 +1985,7 @@ foreach ($Target in $Targets) {
               {customers.length > 0 && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Assign Discovered Computers to Customer Profile
+                    Assign Discovered Computers to Organization Profile
                   </label>
                   <select
                     value={targetCustomerForSync}
@@ -1810,13 +2020,18 @@ foreach ($Target in $Targets) {
                     ouPath: targetOu,
                     specificNames: specificNames.length > 0 ? specificNames : undefined,
                     customerId: targetCustomerForSync,
+                    ldapUrl: ldapServerUrl,
+                    domain: ldapDomain,
+                    baseDn: ldapBaseDn,
+                    bindDn: ldapBindDn,
+                    bindPassword: ldapBindPassword,
                   });
                 }}
                 disabled={isSyncing}
                 className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-lg shadow-cyan-600/25 cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>Execute LDAP Query</span>
+                <span>{isSyncing ? 'Querying Active Directory...' : 'Execute LDAP Query'}</span>
               </button>
             </div>
           </div>

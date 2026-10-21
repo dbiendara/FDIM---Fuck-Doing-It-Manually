@@ -103,6 +103,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   // Active Directory test connection
   const [isTestingAd, setIsTestingAd] = useState(false);
   const [adTestResult, setAdTestResult] = useState<{ success?: boolean; message?: string } | null>(null);
+  const [showAdPassword, setShowAdPassword] = useState(false);
 
   // Docker code copy state
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -952,6 +953,64 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                   </div>
                   <div>
+                    <label className="block text-slate-400 mb-1 font-mono text-[11px]">
+                      Service Account / Bind User (Required for LDAP queries):
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.adLdapConfig.bindDn || ''}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          adLdapConfig: { ...settings.adLdapConfig, bindDn: e.target.value },
+                        })
+                      }
+                      placeholder="administrator@domain.com, DOMAIN\admin, or CN=..."
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 font-mono text-cyan-200 focus:outline-none focus:border-cyan-500"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-0.5">Windows Server forbids anonymous LDAP computer discovery.</p>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-slate-400 font-mono text-[11px]">Service Account Bind Password:</label>
+                      <button
+                        type="button"
+                        onClick={() => setShowAdPassword(!showAdPassword)}
+                        className="text-[10px] text-slate-400 hover:text-cyan-400 flex items-center space-x-1"
+                      >
+                        {showAdPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                        <span>{showAdPassword ? 'Hide' : 'Show'}</span>
+                      </button>
+                    </div>
+                    <input
+                      type={showAdPassword ? 'text' : 'password'}
+                      value={settings.adLdapConfig.bindPassword || ''}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          adLdapConfig: { ...settings.adLdapConfig, bindPassword: e.target.value },
+                        })
+                      }
+                      placeholder="••••••••••••"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 font-mono text-white focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-mono text-[11px]">Computer Search OU (Search Base):</label>
+                    <input
+                      type="text"
+                      value={settings.adLdapConfig.computerSearchOu || ''}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          adLdapConfig: { ...settings.adLdapConfig, computerSearchOu: e.target.value },
+                        })
+                      }
+                      placeholder="OU=Workstations,DC=corp,DC=internal,DC=net (or leave blank for Base DN)"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 font-mono text-white focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
                     <label className="block text-slate-400 mb-1 font-mono text-[11px]">Technician Admin Group:</label>
                     <input
                       type="text"

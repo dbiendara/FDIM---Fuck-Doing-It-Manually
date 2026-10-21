@@ -1289,6 +1289,132 @@ async function resolveAndProbeHost(
 // REAL ACTIVE DIRECTORY LDAPv3 CLIENT ENGINE (ldapts)
 // -------------------------------------------------------------
 
+function formatAdBindCandidates(
+  rawBind: string | undefined,
+  domain?: string,
+  baseDn?: string,
+  ldapUrl?: string
+): string[] {
+  const clean = (rawBind || '').trim();
+  if (!clean) return [];
+
+  // If already contains @ (UPN) or \ (NetBIOS) or starts with CN= (Distinguished Name), put it first
+  if (clean.includes('@') || clean.includes('\\') || /^CN=/i.test(clean)) {
+    return [clean];
+  }
+
+  const candidates: string[] = [];
+
+  // 1. Try UPN from baseDn (e.g. DC=rzhit,DC=win -> rzhit.win -> Administrator@rzhit.win)
+  if (baseDn) {
+    const fqdnFromBase = baseDn
+      .split(',')
+      .map((p) => p.trim())
+      .filter((p) => /^DC=/i.test(p))
+      .map((p) => p.replace(/^DC=/i, ''))
+      .join('.');
+    if (fqdnFromBase) {
+      candidates.push(`${clean}@${fqdnFromBase}`);
+    }
+  }
+
+  // 2. Try NetBIOS domain if available (e.g. RZHIT\Administrator)
+  if (domain && domain.trim()) {
+    const netbios = domain.trim().toUpperCase();
+    candidates.push(`${netbios}\\${clean}`);
+    if (domain.includes('.')) {
+      candidates.push(`${clean}@${domain.trim()}`);
+    }
+  }
+
+  // 3. Try FQDN from ldapUrl (e.g. ldaps://csdc1.rzhit.win:636 -> rzhit.win -> Administrator@rzhit.win)
+  if (ldapUrl) {
+    const hostMatch = ldapUrl.replace(/^ldaps?:\/\//i, '').split(':')[0].split('/')[0];
+    const hostParts = hostMatch.split('.').filter(Boolean);
+    if (hostParts.length >= 2) {
+      const parentDomain = hostParts.length >= 3 ? hostParts.slice(1).join('.') : hostParts.join('.');
+      candidates.push(`${clean}@${parentDomain}`);
+    }
+  }
+
+  // 4. Try standard CN under CN=Users container
+  if (baseDn) {
+    candidates.push(`CN=${clean},CN=Users,${baseDn}`);
+  }
+
+  // 5. Raw username as fallback
+  candidates.push(clean);
+
+  return Array.from(new Set(candidates));
+}
+
+async function executeAdBind(
+  client: LdapClient,
+  bindDn: string | undefined,
+  bindPassword: string | undefined,
+  domain?: string,
+  baseDn?: string,
+  ldapUrl?: string
+): Promise<{ bound: boolean; principalUsed?: string; error?: string }> {
+  const cleanBind = (bindDn || '').trim();
+  const password = bindPassword || '';
+
+  if (!cleanBind) {
+    return {
+      bound: false,
+      error:
+        'Active Directory requires an authenticated bind to query computer objects (anonymous queries are rejected by Windows Server security policy DSID-0C090A5A). Please specify a domain account (e.g. administrator@rzhit.win or RZHIT\\administrator) and password in Settings or LDAP Sync configuration.',
+    };
+  }
+
+  const candidates = formatAdBindCandidates(cleanBind, domain, baseDn, ldapUrl);
+  let lastErr: any = null;
+
+  for (const principal of candidates) {
+    try {
+      await client.bind(principal, password);
+      return { bound: true, principalUsed: principal };
+    } catch (err: any) {
+      lastErr = err;
+      const msg = String(err?.message || '');
+      // If error is explicit invalid credentials (data 52e), account issue, or expired password, break early
+      if (/data 52e/i.test(msg) || /data 532/i.test(msg) || /data 533/i.test(msg) || /data 775/i.test(msg)) {
+        break;
+      }
+    }
+  }
+
+  const errCode = lastErr?.code || lastErr?.name || '';
+  const errMsg = String(lastErr?.message || '');
+
+  if (/data 52e/i.test(errMsg)) {
+    return {
+      bound: false,
+      error: `Active Directory authentication failed for "${cleanBind}": Invalid credentials (password incorrect or user does not exist in domain).`,
+    };
+  } else if (/data 532/i.test(errMsg)) {
+    return {
+      bound: false,
+      error: `Active Directory authentication failed for "${cleanBind}": Password has expired.`,
+    };
+  } else if (/data 533/i.test(errMsg)) {
+    return {
+      bound: false,
+      error: `Active Directory authentication failed for "${cleanBind}": Account is disabled.`,
+    };
+  } else if (/data 775/i.test(errMsg)) {
+    return {
+      bound: false,
+      error: `Active Directory authentication failed for "${cleanBind}": Account is locked out.`,
+    };
+  }
+
+  return {
+    bound: false,
+    error: `Active Directory bind failed for "${cleanBind}" (${errCode}): ${errMsg || 'Authentication rejected by Domain Controller'}`,
+  };
+}
+
 async function testActiveDirectoryConnection(config: {
   ldapUrl: string;
   domain?: string;
@@ -1310,14 +1436,29 @@ async function testActiveDirectoryConnection(config: {
   const dcHost = normalizedUrl.replace(/^ldaps?:\/\//i, '').split(':')[0].split('/')[0];
   const client = new LdapClient({
     url: normalizedUrl,
-    timeout: 6000,
+    timeout: 7000,
     connectTimeout: 5000,
     tlsOptions: { rejectUnauthorized: false },
   });
 
   try {
-    if (config.bindDn && config.bindDn.trim()) {
-      await client.bind(config.bindDn.trim(), config.bindPassword || '');
+    const bindResult = await executeAdBind(
+      client,
+      config.bindDn,
+      config.bindPassword,
+      config.domain,
+      config.baseDn,
+      normalizedUrl
+    );
+
+    if (!bindResult.bound) {
+      await client.unbind().catch(() => {});
+      return {
+        success: false,
+        dcHost,
+        error: bindResult.error || 'Authentication to Active Directory failed',
+        message: bindResult.error || 'Authentication to Active Directory failed',
+      };
     }
 
     let computerCount: number | undefined;
@@ -1330,8 +1471,18 @@ async function testActiveDirectoryConnection(config: {
           sizeLimit: 500,
         });
         computerCount = searchEntries.length;
-      } catch {
-        // Base DN search optional during connection test
+      } catch (searchErr: any) {
+        if (/DSID-0C090A5A/i.test(searchErr?.message || '')) {
+          await client.unbind().catch(() => {});
+          return {
+            success: false,
+            dcHost,
+            error:
+              'Active Directory rejected LDAP search: an authenticated bind must be completed. Please check your bind username and password.',
+            message:
+              'Active Directory rejected LDAP search: an authenticated bind must be completed. Please check your bind username and password.',
+          };
+        }
       }
     }
 
@@ -1340,18 +1491,23 @@ async function testActiveDirectoryConnection(config: {
       success: true,
       dcHost,
       computerCount,
-      message: `Successfully connected and authenticated to Domain Controller [${dcHost}]${
+      message: `Successfully connected and authenticated as [${bindResult.principalUsed}] to Domain Controller [${dcHost}]${
         computerCount !== undefined ? ` (${computerCount} computer objects found in ${config.baseDn})` : ''
       }.`,
     };
   } catch (err: any) {
     await client.unbind().catch(() => {});
     const code = err?.code || err?.name || 'LDAP_ERROR';
+    let msg = err?.message || 'Unreachable or invalid credentials';
+    if (/DSID-0C090A5A/i.test(msg)) {
+      msg =
+        'Active Directory rejected LDAP query: anonymous binds are prohibited by Windows Server policy. A valid domain account and password are required.';
+    }
     return {
       success: false,
       dcHost,
-      error: `Failed to connect to Active Directory at ${normalizedUrl} (${code}): ${err?.message || 'Unreachable or invalid credentials'}`,
-      message: `Failed to connect to Active Directory at ${normalizedUrl} (${code}): ${err?.message || 'Unreachable or invalid credentials'}`,
+      error: `Failed to connect to Active Directory at ${normalizedUrl} (${code}): ${msg}`,
+      message: `Failed to connect to Active Directory at ${normalizedUrl} (${code}): ${msg}`,
     };
   }
 }
@@ -1397,8 +1553,25 @@ async function queryActiveDirectoryComputers(options: {
   const fallbackBaseDn = (options.baseDn || '').trim();
 
   try {
-    if (options.bindDn && options.bindDn.trim()) {
-      await client.bind(options.bindDn.trim(), options.bindPassword || '');
+    const bindResult = await executeAdBind(
+      client,
+      options.bindDn,
+      options.bindPassword,
+      options.domain,
+      options.baseDn,
+      normalizedUrl
+    );
+
+    if (!bindResult.bound) {
+      await client.unbind().catch(() => {});
+      return {
+        success: false,
+        discovered: [],
+        updated: [],
+        totalFoundInAd: 0,
+        searchedBase: primarySearchBase,
+        error: bindResult.error || 'Active Directory authentication failed',
+      };
     }
 
     let filter = '(objectClass=computer)';
@@ -1546,15 +1719,18 @@ async function queryActiveDirectoryComputers(options: {
   } catch (err: any) {
     await client.unbind().catch(() => {});
     const code = err?.code || err?.name || 'LDAP_ERROR';
+    let errorDetail = err?.message || 'Unable to reach Domain Controller';
+    if (/DSID-0C090A5A/i.test(errorDetail)) {
+      errorDetail =
+        'Active Directory rejected LDAP search: Windows Server requires an authenticated bind to query computer objects (anonymous queries are prohibited). Please provide a valid domain account (e.g. administrator@rzhit.win or RZHIT\\Administrator) and password.';
+    }
     return {
       success: false,
       discovered: [],
       updated: [],
       totalFoundInAd: 0,
       searchedBase: primarySearchBase,
-      error: `Active Directory LDAP query failed at ${normalizedUrl} (${code}): ${
-        err?.message || 'Unable to reach Domain Controller'
-      }`,
+      error: `Active Directory LDAP query failed at ${normalizedUrl} (${code}): ${errorDetail}`,
     };
   }
 }
@@ -1876,6 +2052,21 @@ app.post('/api/ad-computers/sync', async (req, res) => {
     const ouPath = req.body.ouPath || settings.adLdapConfig?.computerSearchOu || baseDn;
     const specificNames: string[] = Array.isArray(req.body.specificComputerNames) ? req.body.specificComputerNames : [];
     const customerId = req.body.customerProfileId || (getAllCustomers()[0]?.id || '');
+
+    // If explicit LDAP configuration parameters were provided in the sync request, persist them in settings
+    if (req.body.ldapUrl || req.body.bindDn || req.body.baseDn || req.body.bindPassword) {
+      updateAppSettings({
+        adLdapConfig: {
+          ...settings.adLdapConfig,
+          ...(req.body.ldapUrl ? { ldapUrl: String(req.body.ldapUrl).trim() } : {}),
+          ...(req.body.domain ? { domain: String(req.body.domain).trim() } : {}),
+          ...(req.body.baseDn ? { baseDn: String(req.body.baseDn).trim() } : {}),
+          ...(req.body.bindDn ? { bindDn: String(req.body.bindDn).trim() } : {}),
+          ...(req.body.bindPassword !== undefined ? { bindPassword: String(req.body.bindPassword) } : {}),
+          ...(req.body.ouPath ? { computerSearchOu: String(req.body.ouPath).trim() } : {}),
+        },
+      });
+    }
 
     const syncResult = await queryActiveDirectoryComputers({
       ldapUrl,
