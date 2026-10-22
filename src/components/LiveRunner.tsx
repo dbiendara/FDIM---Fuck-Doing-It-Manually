@@ -112,6 +112,8 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
   const [copiedWinRmCmd, setCopiedWinRmCmd] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isQueueingTask, setIsQueueingTask] = useState(false);
+  const [taskQueuedMessage, setTaskQueuedMessage] = useState<string | null>(null);
   const [activeExecTab, setActiveExecTab] = useState<'direct' | 'winrm' | 'agent' | 'dryrun'>('direct');
 
   const terminalEndRef = useRef<HTMLDivElement>(null);
@@ -125,6 +127,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          serverUrl: window.location.origin,
           machineName: machineName || '$env:COMPUTERNAME',
           customerProfileId: customer.id,
           selectedPackageIds: selectedPackages.map((p) => p.id),
@@ -166,6 +169,35 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
       console.error('Error creating live deployment session:', err);
     } finally {
       setIsInitializing(false);
+    }
+  };
+
+  // Manual Queue Task (if computer is currently offline or unreachable)
+  const handleQueueTaskForOffline = async () => {
+    if (!sessionId) return;
+    setIsQueueingTask(true);
+    try {
+      const res = await fetch(`/api/deployments/live/${sessionId}/queue-task`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTaskQueuedMessage(data.message || `Task successfully added to Agent Queue for ${machineName}!`);
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            level: 'info',
+            message: `[MANUAL ACTION] Computer marked offline/unavailable. Deployment task scheduled in Agent Queue (${data.task?.id || 'ID pending'}).`,
+          },
+        ]);
+        setTimeout(() => setTaskQueuedMessage(null), 8000);
+      }
+    } catch (err) {
+      console.error('Error queuing task for offline computer:', err);
+    } finally {
+      setIsQueueingTask(false);
     }
   };
 
@@ -318,7 +350,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
                     ? 'bg-emerald-400'
                     : sessionStatus === 'failed'
                     ? 'bg-rose-500'
-                    : 'bg-amber-400 animate-pulse'
+                    : 'bg-emerald-400'
                 }`}
               ></span>
               <h1 className="text-xl font-extrabold text-white">
@@ -332,13 +364,13 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
                     ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
                     : sessionStatus === 'failed'
                     ? 'bg-rose-950 text-rose-300 border-rose-800'
-                    : 'bg-amber-950 text-amber-300 border-amber-800'
+                    : 'bg-emerald-950 text-emerald-300 border-emerald-800'
                 }`}
               >
                 {sessionStatus === 'waiting_for_connection'
-                  ? 'Waiting for Connection'
+                  ? 'Workstation Ready — Awaiting Execution'
                   : sessionStatus === 'running'
-                  ? 'Live Stream Connected'
+                  ? 'Live Stream Running'
                   : sessionStatus === 'completed'
                   ? 'Completed (ExitCode 0)'
                   : 'Failed'}
@@ -360,6 +392,18 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
 
           {/* Action Controls */}
           <div className="flex items-center space-x-3 self-start lg:self-auto flex-wrap gap-y-2">
+            {sessionStatus === 'waiting_for_connection' && (
+              <button
+                onClick={handleQueueTaskForOffline}
+                disabled={isQueueingTask}
+                title="If this computer is currently powered off, in sleep, or off-network, click here to queue it for automatic background installation"
+                className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-amber-950/70 hover:bg-amber-900/80 text-amber-200 hover:text-white border border-amber-700/60 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+              >
+                <Clock className="w-4 h-4 text-amber-400" />
+                <span>{isQueueingTask ? 'Queuing Task...' : 'Queue Task (Computer Offline / Unavailable)'}</span>
+              </button>
+            )}
+
             <button
               onClick={handleRestart}
               className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold transition-all cursor-pointer"
@@ -379,6 +423,16 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
             )}
           </div>
         </div>
+
+        {taskQueuedMessage && (
+          <div className="mt-4 p-3 rounded-xl bg-amber-950/50 border border-amber-600/60 text-amber-200 text-xs flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{taskQueuedMessage}</span>
+            </div>
+            <span className="font-mono text-[11px] text-amber-300 font-bold">Scheduled in Agent Queue</span>
+          </div>
+        )}
 
         {/* Target Reachability & Remote Execution Control Panel */}
         <div className="mt-5 p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
@@ -515,25 +569,46 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
 
           {/* Tab 3: Autonomous Client Agent */}
           {activeExecTab === 'agent' && (
-            <div className="space-y-2 text-xs text-slate-300">
-              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-2">
+            <div className="space-y-3 text-xs text-slate-300">
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-white">
-                    Autonomous Scheduled Task Dispatch
+                  <span className="font-semibold text-white flex items-center space-x-1.5">
+                    <Radio className="w-4 h-4 text-blue-400" />
+                    <span>Autonomous Agent & Offline Queue</span>
                   </span>
-                  <span className="text-[11px] font-mono text-emerald-400">Task Queued in Agent Pool</span>
+                  <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-bold border ${
+                    taskQueuedMessage
+                      ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}>
+                    {taskQueuedMessage ? 'Task Queued' : 'On-Demand Queue'}
+                  </span>
                 </div>
                 <p className="text-slate-400">
-                  A software deployment task has been placed into the FDIM Agent Queue for{' '}
-                  <strong className="text-white">{machineName}</strong>.
-                  {agentConnected ? (
-                    ' The client agent running as NT AUTHORITY\\SYSTEM will execute this unattended on its next heartbeat interval.'
-                  ) : (
-                    ' Note: The FDIM Client Agent is not yet detected on this computer. Use the 1-Click Host Runner or WinRM Push above, or deploy the client agent.'
-                  )}
+                  If <strong className="text-white">{machineName}</strong> is powered off, offline, or unavailable right now,
+                  click the button below to stage this software deployment in the Agent Queue. The client agent will pick it up
+                  and install unattended as soon as the workstation checks in.
                 </p>
+
+                <div className="flex items-center space-x-3 pt-1">
+                  <button
+                    onClick={handleQueueTaskForOffline}
+                    disabled={isQueueingTask}
+                    className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-all shadow-md cursor-pointer disabled:opacity-50"
+                  >
+                    <Clock className="w-4 h-4" />
+                    <span>{isQueueingTask ? 'Queuing Task...' : 'Queue Task (Computer Offline / Unavailable)'}</span>
+                  </button>
+                  {taskQueuedMessage && (
+                    <span className="text-emerald-400 text-[11px] flex items-center space-x-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Task active in background queue</span>
+                    </span>
+                  )}
+                </div>
+
                 <div className="pt-2 border-t border-slate-800 flex items-center space-x-2 text-[11px]">
-                  <span className="text-slate-400">To trigger the agent immediately on the machine:</span>
+                  <span className="text-slate-400">To trigger the agent immediately on the target workstation:</span>
                   <code className="bg-slate-950 px-2 py-0.5 rounded text-cyan-300 font-mono">
                     schtasks /run /tn "FDIM-ClientAgent"
                   </code>

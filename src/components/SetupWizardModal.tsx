@@ -659,7 +659,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
                     type="text"
                     value={adBindDn}
                     onChange={(e) => setAdBindDn(e.target.value)}
-                    placeholder="administrator@rzhit.win, RZHIT\administrator, or CN=..."
+                    placeholder="administrator@corp.local, CORP\administrator, or CN=..."
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono text-[11px]"
                   />
                   <p className="text-[10px] text-slate-500 mt-1">

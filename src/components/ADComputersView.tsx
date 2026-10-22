@@ -1868,7 +1868,7 @@ foreach ($Target in $Targets) {
                           type="text"
                           value={ldapServerUrl}
                           onChange={(e) => setLdapServerUrl(e.target.value)}
-                          placeholder="ldaps://csdc1.rzhit.win:636"
+                          placeholder="ldaps://dc01.corp.local:636"
                           className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
                         />
                       </div>
@@ -1878,7 +1878,7 @@ foreach ($Target in $Targets) {
                           type="text"
                           value={ldapDomain}
                           onChange={(e) => setLdapDomain(e.target.value)}
-                          placeholder="RZHIT"
+                          placeholder="CORP"
                           className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-white focus:outline-none focus:border-cyan-500 uppercase"
                         />
                       </div>
@@ -1890,7 +1890,7 @@ foreach ($Target in $Targets) {
                         type="text"
                         value={ldapBaseDn}
                         onChange={(e) => setLdapBaseDn(e.target.value)}
-                        placeholder="DC=rzhit,DC=win"
+                        placeholder="DC=corp,DC=local"
                         className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
                       />
                     </div>
@@ -1904,7 +1904,7 @@ foreach ($Target in $Targets) {
                           type="text"
                           value={ldapBindDn}
                           onChange={(e) => setLdapBindDn(e.target.value)}
-                          placeholder="administrator@rzhit.win or RZHIT\administrator"
+                          placeholder="administrator@corp.local or CORP\administrator"
                           className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-500"
                         />
                       </div>
@@ -1966,7 +1966,7 @@ foreach ($Target in $Targets) {
                   type="text"
                   value={targetOu}
                   onChange={(e) => setTargetOu(e.target.value)}
-                  placeholder="OU=Workstations,DC=rzhit,DC=win (or leave blank to search entire domain)"
+                  placeholder="OU=Workstations,DC=corp,DC=local (or leave blank to search entire domain)"
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
                 />
               </div>
@@ -1979,7 +1979,7 @@ foreach ($Target in $Targets) {
                   type="text"
                   value={specificComputerQuery}
                   onChange={(e) => setSpecificComputerQuery(e.target.value)}
-                  placeholder="e.g. CSPC01, CSPC02 (Leave blank to sync all computers in OU)"
+                  placeholder="e.g. WS01, WS02 (Leave blank to sync all computers in OU)"
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
                 />
               </div>

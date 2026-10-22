@@ -60,6 +60,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set('trust proxy', true);
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json({ limit: '10mb' }));
@@ -1307,7 +1308,7 @@ function formatAdBindCandidates(
 
   const candidates: string[] = [];
 
-  // 1. Try UPN from baseDn (e.g. DC=rzhit,DC=win -> rzhit.win -> Administrator@rzhit.win)
+  // 1. Try UPN from baseDn (e.g. DC=corp,DC=local -> corp.local -> Administrator@corp.local)
   if (baseDn) {
     const fqdnFromBase = baseDn
       .split(',')
@@ -1320,7 +1321,7 @@ function formatAdBindCandidates(
     }
   }
 
-  // 2. Try NetBIOS domain if available (e.g. RZHIT\Administrator)
+  // 2. Try NetBIOS domain if available (e.g. CORP\Administrator)
   if (domain && domain.trim()) {
     const netbios = domain.trim().toUpperCase();
     candidates.push(`${netbios}\\${clean}`);
@@ -1329,7 +1330,7 @@ function formatAdBindCandidates(
     }
   }
 
-  // 3. Try FQDN from ldapUrl (e.g. ldaps://csdc1.rzhit.win:636 -> rzhit.win -> Administrator@rzhit.win)
+  // 3. Try FQDN from ldapUrl (e.g. ldaps://dc01.corp.local:636 -> corp.local -> Administrator@corp.local)
   if (ldapUrl) {
     const hostMatch = ldapUrl.replace(/^ldaps?:\/\//i, '').split(':')[0].split('/')[0];
     const hostParts = hostMatch.split('.').filter(Boolean);
@@ -1365,7 +1366,7 @@ async function executeAdBind(
     return {
       bound: false,
       error:
-        'Active Directory requires an authenticated bind to query computer objects (anonymous queries are rejected by Windows Server security policy DSID-0C090A5A). Please specify a domain account (e.g. administrator@rzhit.win or RZHIT\\administrator) and password in Settings or LDAP Sync configuration.',
+        'Active Directory requires an authenticated bind to query computer objects (anonymous queries are rejected by Windows Server security policy DSID-0C090A5A). Please specify a domain account (e.g. administrator@corp.local or CORP\\administrator) and password in Settings or LDAP Sync configuration.',
     };
   }
 
@@ -1725,7 +1726,7 @@ async function queryActiveDirectoryComputers(options: {
     let errorDetail = err?.message || 'Unable to reach Domain Controller';
     if (/DSID-0C090A5A/i.test(errorDetail)) {
       errorDetail =
-        'Active Directory rejected LDAP search: Windows Server requires an authenticated bind to query computer objects (anonymous queries are prohibited). Please provide a valid domain account (e.g. administrator@rzhit.win or RZHIT\\Administrator) and password.';
+        'Active Directory rejected LDAP search: Windows Server requires an authenticated bind to query computer objects (anonymous queries are prohibited). Please provide a valid domain account (e.g. administrator@corp.local or CORP\\Administrator) and password.';
     }
     return {
       success: false,
@@ -2915,7 +2916,10 @@ function buildLiveDeploymentScript(session: LiveDeploymentSession, serverUrl: st
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Continue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+try {
+    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+} catch {}
 
 $ServerUrl = "${serverUrl}"
 $SessionId = "${sessionId}"
@@ -3168,7 +3172,10 @@ app.post('/api/deployments/live-session', async (req, res) => {
     const allSwitches = getAllSystemSwitches();
 
     const settings = getAppSettings();
-    const effectiveServerUrl = (settings.agentConfig?.serverUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+    const clientProvidedUrl = typeof req.body.serverUrl === 'string' && req.body.serverUrl.trim() ? req.body.serverUrl.trim() : null;
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const host = req.headers['x-forwarded-host'] || req.get('host') || `localhost:${PORT}`;
+    const effectiveServerUrl = (clientProvidedUrl || settings.agentConfig?.serverUrl || `${proto}://${host}`).replace(/\/+$/, '');
 
     // Probe target workstation network & agent status
     const existingComp = getADComputerByName(cleanName);
@@ -3246,31 +3253,11 @@ app.post('/api/deployments/live-session', async (req, res) => {
       logLines: [],
     });
 
-    const runCommand = `powershell.exe -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $s = Invoke-RestMethod -Uri '${effectiveServerUrl}/api/deployments/live/${sessionId}/run' -UseBasicParsing; Invoke-Expression $s"`;
-    const remoteWinRmCommand = `Invoke-Command -ComputerName "${cleanName}" -ScriptBlock { param($u) [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $s = Invoke-RestMethod -Uri "$u/api/deployments/live/${sessionId}/run" -UseBasicParsing; Invoke-Expression $s } -ArgumentList '${effectiveServerUrl}'`;
-
-    // Queue task so background client agent (if installed) can also pick it up automatically
-    const queuedTask = saveQueuedTask({
-      id: `task-live-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-      machineName: cleanName,
-      taskType: 'SoftwareInstall',
-      title: `Live Deployment: ${targetPackages.map((p) => p.name).join(', ') || 'Software Install'}`,
-      status: 'queued',
-      payload: {
-        packageIds: targetPackages.map((p) => p.id),
-        customerProfileId: customer?.id || '',
-        command: runCommand,
-      },
-      executionMode: executionMode || (agentConnected ? 'agent_system' : 'service_account'),
-      serviceAccount: serviceAccount || settings.runnerServiceAccount?.username || 'CORP\\svc_fdim_runner',
-      createdAt: new Date().toISOString(),
-      createdBy: activeSessionUser.displayName,
-      retryCount: 0,
-      maxRetries: 3,
-    });
+    const runCommand = `powershell.exe -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}; $s = Invoke-RestMethod -Uri '${effectiveServerUrl}/api/deployments/live/${sessionId}/run' -UseBasicParsing; Invoke-Expression $s"`;
+    const remoteWinRmCommand = `Invoke-Command -ComputerName "${cleanName}" -ScriptBlock { param($u) [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}; $s = Invoke-RestMethod -Uri "$u/api/deployments/live/${sessionId}/run" -UseBasicParsing; Invoke-Expression $s } -ArgumentList '${effectiveServerUrl}'`;
 
     const now = new Date().toLocaleTimeString();
-    const initialLog = `[${now}] [INFO] Live Deployment Session [${sessionId}] initialized for machine ${cleanName}. Waiting for execution connection...`;
+    const initialLog = `[${now}] [INFO] Live Deployment Session [${sessionId}] initialized for machine ${cleanName} (${probe.ipAddress}). Ready for deployment.`;
 
     const session: LiveDeploymentSession = {
       id: sessionId,
@@ -3301,7 +3288,6 @@ app.post('/api/deployments/live-session', async (req, res) => {
       winrmReachable,
       agentConnected,
       targetIp: probe.ipAddress,
-      queuedTaskId: queuedTask.id,
     };
 
     liveDeploymentSessions.set(sessionId, session);
@@ -3316,12 +3302,56 @@ app.post('/api/deployments/live-session', async (req, res) => {
       winrmReachable,
       targetIp: probe.ipAddress,
       serverUrl: effectiveServerUrl,
-      queuedTaskId: queuedTask.id,
     });
   } catch (err: any) {
     console.error('Error creating live deployment session:', err);
     res.status(500).json({ error: err?.message || 'Failed to initialize live deployment session' });
   }
+});
+
+// Manual Queue Task endpoint for Live Runner when workstation is offline or user wants background execution
+app.post('/api/deployments/live/:sessionId/queue-task', (req, res) => {
+  const session = liveDeploymentSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Live deployment session not found or expired' });
+  }
+
+  const pkgNames = session.packages?.map((p) => p.name).join(', ') || `${session.packageIds.length} packages`;
+  const queuedTask: QueuedTask = {
+    id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    machineName: session.machineName,
+    taskType: 'SoftwareInstall',
+    title: `Install ${pkgNames} on ${session.machineName} (Queued from Live Runner)`,
+    status: 'queued',
+    payload: {
+      packageIds: session.packageIds,
+      customerProfileId: session.customerProfileId || '',
+      customSwitches: session.packageCustomSwitches,
+      configFiles: session.packageConfigFiles,
+      switchIds: session.enabledSwitchIds,
+      switchParameters: session.switchParameters,
+      command: session.runCommand,
+    },
+    executionMode: 'agent_system',
+    serviceAccount: 'SYSTEM',
+    createdAt: new Date().toISOString(),
+    createdBy: 'Live Runner Manual Queue',
+    retryCount: 0,
+    maxRetries: 3,
+  };
+
+  saveQueuedTask(queuedTask);
+  session.logs.push({
+    timestamp: new Date().toLocaleTimeString(),
+    level: 'info',
+    message: `[MANUAL QUEUE] Deployment queued as background task ${queuedTask.id} for machine ${session.machineName} when online.`,
+  });
+
+  res.json({
+    success: true,
+    message: `Deployment task successfully created for ${session.machineName}. It will execute automatically when the client agent checks in or connects.`,
+    task: queuedTask,
+  });
 });
 
 // 3. Get Live Session Status (polling endpoint for UI)
