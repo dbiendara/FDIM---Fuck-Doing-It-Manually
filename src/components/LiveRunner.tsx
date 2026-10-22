@@ -34,6 +34,12 @@ import {
   Printer,
   UserCheck,
   Radio,
+  Wifi,
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
+  Cpu,
+  RefreshCw,
 } from 'lucide-react';
 import { getFdimExpansion } from '../utils/branding';
 
@@ -85,7 +91,8 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
   onOpenAuditModal,
   showProfanity = true,
 }) => {
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionStatus, setSessionStatus] = useState<'waiting_for_connection' | 'running' | 'completed' | 'failed'>('waiting_for_connection');
   const [steps, setSteps] = useState<StepItem[]>([]);
   const [logs, setLogs] = useState<Array<{ timestamp: string; level: 'info' | 'warn' | 'error' | 'success'; message: string }>>([]);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -95,289 +102,196 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
   const [logFilter, setLogFilter] = useState<'all' | 'errors' | 'success'>('all');
   const [executionIdentity, setExecutionIdentity] = useState<'service_account' | 'agent_system' | 'technician'>('service_account');
 
+  // Live session execution commands & metadata
+  const [runCommand, setRunCommand] = useState('');
+  const [remoteWinRmCommand, setRemoteWinRmCommand] = useState('');
+  const [agentConnected, setAgentConnected] = useState(false);
+  const [winrmReachable, setWinrmReachable] = useState(false);
+  const [targetIp, setTargetIp] = useState<string>('');
+  const [copiedRunCmd, setCopiedRunCmd] = useState(false);
+  const [copiedWinRmCmd, setCopiedWinRmCmd] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [activeExecTab, setActiveExecTab] = useState<'direct' | 'winrm' | 'agent' | 'dryrun'>('direct');
+
   const terminalEndRef = useRef<HTMLDivElement>(null);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Initialize pipeline steps
-  useEffect(() => {
-    const initialSteps: StepItem[] = [];
+  // 1. Initialize Live Session on Backend
+  const initLiveSession = async () => {
+    setIsInitializing(true);
+    try {
+      const res = await fetch('/api/deployments/live-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          machineName: machineName || '$env:COMPUTERNAME',
+          customerProfileId: customer.id,
+          selectedPackageIds: selectedPackages.map((p) => p.id),
+          packageCustomSwitches,
+          packageConfigFiles,
+          systemConfig,
+          enabledSwitchIds,
+          switchParameters,
+          stagedDrives,
+          stagedPrinters,
+          userLogonStaging,
+          deploymentType: 'QuickSoftwareInstall',
+          executionMode: executionIdentity,
+        }),
+      });
 
-    // Pre-flight checks
-    initialSteps.push({
-      id: 'step-preflight-ad',
-      type: 'preflight',
-      title: 'Active Directory Domain Membership Verification',
-      subtext: `Validating PartOfDomain for ${customer.domainName}`,
-      status: 'pending',
-      logLines: [],
-    });
-    initialSteps.push({
-      id: 'step-preflight-unc',
-      type: 'preflight',
-      title: 'UNC Network Share Reachability',
-      subtext: 'Testing SMB port 445 connectivity to deployment shares',
-      status: 'pending',
-      logLines: [],
-    });
-
-    // Dynamic or fallback system configurations
-    if (systemSwitches.length > 0 && enabledSwitchIds.length > 0) {
-      const activeSwitches = systemSwitches.filter((s) => enabledSwitchIds.includes(s.id));
-      activeSwitches.forEach((sw) => {
-        let sub = sw.description;
-        if (sw.parameterKey && switchParameters[sw.parameterKey] !== undefined) {
-          sub += ` [${sw.parameterKey} = ${switchParameters[sw.parameterKey]}]`;
+      const data = await res.json();
+      if (data.sessionId) {
+        setSessionId(data.sessionId);
+        setRunCommand(data.runCommand);
+        setRemoteWinRmCommand(data.remoteWinRmCommand);
+        setAgentConnected(Boolean(data.agentConnected));
+        setWinrmReachable(Boolean(data.winrmReachable));
+        setTargetIp(data.targetIp || '');
+        if (data.session) {
+          setSessionStatus(data.session.status);
+          setSteps(data.session.steps || []);
+          setLogs(data.session.logs || []);
         }
-        initialSteps.push({
-          id: `step-sys-${sw.id}`,
-          type: 'system',
-          title: sw.title,
-          subtext: sub,
-          status: 'pending',
-          logLines: [],
-        });
-      });
-    } else {
-      // Legacy fallback
-      if (systemConfig.enableRdp) {
-        initialSteps.push({
-          id: 'step-sys-sw-rdp',
-          type: 'system',
-          title: 'Enable Remote Desktop (RDP) & Firewall',
-          subtext: 'Configures fDenyTSConnections=0 and NLA user authentication',
-          status: 'pending',
-          logLines: [],
-        });
+        if (data.agentConnected) {
+          setActiveExecTab('agent');
+        } else if (data.winrmReachable) {
+          setActiveExecTab('winrm');
+        } else {
+          setActiveExecTab('direct');
+        }
       }
-      if (systemConfig.addAdGroupToAdmins && systemConfig.adAdminGroupName) {
-        initialSteps.push({
-          id: 'step-sys-sw-adgroup',
-          type: 'system',
-          title: `Add AD Group to Local Administrators`,
-          subtext: `Delegates admin rights to ${systemConfig.adAdminGroupName}`,
-          status: 'pending',
-          logLines: [],
-        });
-      }
-      if (systemConfig.setPowerPlan) {
-        initialSteps.push({
-          id: 'step-sys-sw-power-screen',
-          type: 'system',
-          title: 'Configure Power Plan Timeouts',
-          subtext: `Screen: ${systemConfig.screenTimeoutAc}m, Standby: ${systemConfig.standbyTimeoutAc === 0 ? 'Never' : `${systemConfig.standbyTimeoutAc}m`}`,
-          status: 'pending',
-          logLines: [],
-        });
-      }
-      if (systemConfig.enableLocalAdmin !== false) {
-        initialSteps.push({
-          id: 'step-sys-sw-local-admin',
-          type: 'system',
-          title: 'Enable Local Administrator & Set Password',
-          subtext: 'Enables built-in Administrator (SID *-500) and sets secure administrator password',
-          status: 'pending',
-          logLines: [],
-        });
-      }
-      if (systemConfig.deleteOobeAccount !== false) {
-        const oobeName = systemConfig.oobeAccountName || 'install';
-        initialSteps.push({
-          id: 'step-sys-sw-delete-oobe',
-          type: 'system',
-          title: `Delete Temporary OOBE Setup Account ('${oobeName}')`,
-          subtext: `Purges temporary '${oobeName}' account and removes its user profile from C:\\Users`,
-          status: 'pending',
-          logLines: [],
-        });
-      }
+    } catch (err) {
+      console.error('Error creating live deployment session:', err);
+    } finally {
+      setIsInitializing(false);
     }
+  };
 
-    // Software packages
-    selectedPackages.forEach((pkg) => {
-      const isWinget = pkg.sourceType === 'winget' || pkg.installerType === 'Winget' || Boolean(pkg.wingetId);
-      const extra = packageCustomSwitches[pkg.id] || pkg.extraSwitches;
-      const config = packageConfigFiles[pkg.id] || pkg.configFileImport?.configFileName;
-      
-      let sub = isWinget
-        ? `winget install --id "${pkg.wingetId || pkg.fileName}" --silent`
-        : `${pkg.uncPath}\\${pkg.fileName}`;
-      if (extra) sub += ` [Extra switches active]`;
-      if (config) sub += ` [Config: ${config}]`;
+  useEffect(() => {
+    initLiveSession();
+  }, [machineName, customer.id, selectedPackages]);
 
-      initialSteps.push({
-        id: `step-pkg-${pkg.id}`,
-        type: 'package',
-        title: isWinget ? `Winget Install: ${pkg.name}` : `Silent Install: ${pkg.name}`,
-        subtext: sub,
-        status: 'pending',
-        logLines: [],
-      });
-    });
+  // 2. Poll Live Session Status from Backend
+  useEffect(() => {
+    if (!sessionId || isFinished) return;
 
-    // Staged User First-Logon Setup (Network Drives & Printers via Active Setup)
-    if (userLogonStaging?.enabled !== false && (stagedDrives.length > 0 || stagedPrinters.length > 0)) {
-      const driveList = stagedDrives.map((d) => d.driveLetter).join(', ');
-      initialSteps.push({
-        id: 'step-user-first-logon-staging',
-        type: 'logon-staging',
-        title: 'Stage User First-Logon Setup (Active Setup & Machine Printers)',
-        subtext: `Staging ${stagedDrives.length} drives (${driveList || 'none'}) and ${stagedPrinters.length} printers for new user first logon`,
-        status: 'pending',
-        logLines: [],
-      });
-    }
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch(`/api/deployments/live/${sessionId}/status`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.session) {
+          const s = data.session;
+          setSessionStatus(s.status);
+          if (Array.isArray(s.steps)) setSteps(s.steps);
+          if (Array.isArray(s.logs)) setLogs(s.logs);
 
-    // Post-flight
-    initialSteps.push({
-      id: 'step-postflight-audit',
-      type: 'postflight',
-      title: 'Workstation Verification & Handover Signoff',
-      subtext: `Certifying setup compliance for ${customer.companyName}`,
-      status: 'pending',
-      logLines: [],
-    });
+          if (s.status === 'running') {
+            setIsDeploying(true);
+          } else if (s.status === 'completed' || s.status === 'failed') {
+            setIsFinished(true);
+            setIsDeploying(false);
+            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
-    setSteps(initialSteps);
-  }, [
-    selectedPackages,
-    systemConfig,
-    customer,
-    packageCustomSwitches,
-    packageConfigFiles,
-    systemSwitches,
-    enabledSwitchIds,
-    switchParameters,
-    stagedDrives,
-    stagedPrinters,
-    userLogonStaging,
-  ]);
+            // Construct final record
+            const record: DeploymentRecord = {
+              id: `dep-${Date.now().toString(36)}`,
+              machineName: s.machineName || machineName || '$env:COMPUTERNAME',
+              domainName: customer.domainName,
+              customerProfileId: customer.id,
+              customerCompanyName: customer.companyName,
+              deploymentType: 'QuickSoftwareInstall',
+              status: s.status === 'completed' ? 'Completed' : 'Failed',
+              startedAt: s.startedAt || new Date().toISOString(),
+              completedAt: s.completedAt || new Date().toISOString(),
+              selectedPackageIds: selectedPackages.map((p) => p.id),
+              appliedSwitchIds: enabledSwitchIds,
+              switchParameters,
+              systemConfig,
+              stagedDrives,
+              stagedPrinters,
+              userLogonStaging,
+              technicianName: 'Admin (FDIM Live Runner)',
+              logs: s.logs || logs,
+              results: {
+                packages: Object.fromEntries(
+                  selectedPackages.map((p) => [
+                    p.id,
+                    { status: s.status === 'completed' ? 'success' : 'failed', exitCode: s.exitCode ?? 0 },
+                  ])
+                ),
+                systemConfigs: Object.fromEntries(enabledSwitchIds.map((swId) => [swId, { status: 'success' }])),
+              },
+            };
+            onCompleteDeployment(record);
+          }
+        }
+      } catch (err) {
+        console.error('Error polling live session:', err);
+      }
+    };
 
-  // Elapsed timer
+    pollIntervalRef.current = setInterval(fetchStatus, 1500);
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, [sessionId, isFinished, customer, machineName, selectedPackages, enabledSwitchIds, switchParameters, systemConfig, stagedDrives, stagedPrinters, userLogonStaging, onCompleteDeployment]);
+
+  // Elapsed timer when actively running
   useEffect(() => {
     let timer: NodeJS.Timeout;
-    if (isDeploying && !isPaused && !isFinished) {
+    if (sessionStatus === 'running' && !isPaused && !isFinished) {
       timer = setInterval(() => {
         setElapsedSeconds((prev) => prev + 1);
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [isDeploying, isPaused, isFinished]);
-
-  // Execution simulation engine
-  useEffect(() => {
-    if (!isDeploying || isPaused || isFinished || steps.length === 0) return;
-
-    if (currentStepIndex >= steps.length) {
-      setIsFinished(true);
-      setIsDeploying(false);
-
-      const record: DeploymentRecord = {
-        id: `dep-${Date.now().toString(36)}`,
-        machineName: machineName || '$env:COMPUTERNAME',
-        domainName: customer.domainName,
-        customerProfileId: customer.id,
-        customerCompanyName: customer.companyName,
-        status: 'Completed',
-        startedAt: new Date(Date.now() - elapsedSeconds * 1000).toISOString(),
-        completedAt: new Date().toISOString(),
-        selectedPackageIds: selectedPackages.map((p) => p.id),
-        appliedSwitchIds: enabledSwitchIds,
-        switchParameters,
-        systemConfig,
-        stagedDrives,
-        stagedPrinters,
-        userLogonStaging,
-        technicianName: 'Admin (FDIM Suite)',
-        logs,
-        results: {
-          packages: Object.fromEntries(selectedPackages.map((p) => [p.id, { status: 'success', exitCode: 0 }])),
-          systemConfigs: Object.fromEntries(enabledSwitchIds.map((swId) => [swId, { status: 'success' }])),
-        },
-      };
-
-      onCompleteDeployment(record);
-      return;
-    }
-
-    const currentStep = steps[currentStepIndex];
-
-    setSteps((prev) =>
-      prev.map((step, idx) => (idx === currentStepIndex ? { ...step, status: 'running' } : step))
-    );
-
-    const timeStr = new Date().toLocaleTimeString();
-    const startMsg = `[${timeStr}] [INFO] Executing step [${currentStepIndex + 1}/${steps.length}]: ${currentStep.title}...`;
-    setLogs((prev) => [...prev, { timestamp: timeStr, level: 'info', message: startMsg }]);
-
-    let stepTime = 1200;
-    if (currentStep.type === 'package') stepTime = 1800;
-    if (currentStep.type === 'preflight') stepTime = 700;
-
-    const timeout = setTimeout(() => {
-      const finishTimeStr = new Date().toLocaleTimeString();
-      let successMsg = `[${finishTimeStr}] [SUCCESS] Completed: ${currentStep.title} (ExitCode 0)`;
-
-      if (currentStep.id.startsWith('step-sys-')) {
-        const swId = currentStep.id.replace('step-sys-', '');
-        const matchingSwitch = systemSwitches.find((s) => s.id === swId);
-        if (swId === 'sw-rdp') {
-          successMsg = `[${finishTimeStr}] [SUCCESS] RDP enabled with NLA and Windows Firewall rule verified.`;
-        } else if (swId === 'sw-adgroup') {
-          const adGroup = switchParameters?.adAdminGroupName || systemConfig.adAdminGroupName;
-          successMsg = `[${finishTimeStr}] [SUCCESS] Delegated Local Administrators to AD group [${adGroup}].`;
-        } else if (swId === 'sw-power-screen' || swId === 'sw-power-standby') {
-          const scr = switchParameters?.screenTimeoutAc ?? systemConfig.screenTimeoutAc;
-          const stb = switchParameters?.standbyTimeoutAc ?? systemConfig.standbyTimeoutAc;
-          successMsg = `[${finishTimeStr}] [SUCCESS] Power plan active: Screen timeout ${scr}m, Standby ${stb}m.`;
-        } else if (swId === 'sw-local-admin') {
-          successMsg = `[${finishTimeStr}] [SUCCESS] Built-in local Administrator enabled (SID *-500) and secure password configured (PasswordNeverExpires=True).`;
-        } else if (swId === 'sw-delete-oobe') {
-          const oobeName = switchParameters?.oobeAccountName || systemConfig.oobeAccountName || 'install';
-          successMsg = `[${finishTimeStr}] [SUCCESS] Temporary OOBE setup account [${oobeName}] expunged and user profile directory purged.`;
-        } else if (matchingSwitch) {
-          successMsg = `[${finishTimeStr}] [SUCCESS] Applied custom task: ${matchingSwitch.title}.`;
-        }
-      } else if (currentStep.type === 'package') {
-        const pkg = selectedPackages.find((p) => `step-pkg-${p.id}` === currentStep.id);
-        if (pkg) {
-          const isWinget = pkg.sourceType === 'winget' || pkg.installerType === 'Winget' || Boolean(pkg.wingetId);
-          const extra = packageCustomSwitches[pkg.id] || pkg.extraSwitches || '';
-          if (isWinget) {
-            successMsg = `[${finishTimeStr}] [SUCCESS] Winget installation verified: ${pkg.name} (winget install --id "${pkg.wingetId || pkg.fileName}" -e)`;
-          } else {
-            successMsg = `[${finishTimeStr}] [SUCCESS] UNC silent install verified: ${pkg.name} ${extra ? `[Extra switches: ${extra}]` : ''}`;
-          }
-        }
-      } else if (currentStep.type === 'logon-staging') {
-        const dCount = stagedDrives.length;
-        const pCount = stagedPrinters.length;
-        successMsg = `[${finishTimeStr}] [SUCCESS] Active Setup registered (HKLM) & payload staged (C:\\ProgramData\\FDIM\\UserLogonSetup.ps1). ${dCount} network drive(s) and ${pCount} printer(s) will map seamlessly upon initial user logon!`;
-      }
-
-      setLogs((prev) => [...prev, { timestamp: finishTimeStr, level: 'success', message: successMsg }]);
-
-      setSteps((prev) =>
-        prev.map((step, idx) => (idx === currentStepIndex ? { ...step, status: 'success' } : step))
-      );
-
-      setCurrentStepIndex((prev) => prev + 1);
-    }, stepTime);
-
-    return () => clearTimeout(timeout);
-  }, [isDeploying, isPaused, isFinished, currentStepIndex, steps.length]);
+  }, [sessionStatus, isPaused, isFinished]);
 
   // Auto-scroll terminal
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
+  // Handle dry-run test simulation
+  const handleStartSimulation = async () => {
+    if (!sessionId) return;
+    setIsSimulating(true);
+    try {
+      await fetch(`/api/deployments/live/${sessionId}/simulate`, { method: 'POST' });
+    } catch (err) {
+      console.error('Error starting simulation:', err);
+    }
+  };
+
   const handleRestart = () => {
-    setCurrentStepIndex(0);
     setIsFinished(false);
     setIsPaused(false);
     setElapsedSeconds(0);
     setLogs([]);
-    setSteps((prev) => prev.map((s) => ({ ...s, status: 'pending' })));
-    setIsDeploying(true);
+    initLiveSession();
+  };
+
+  const handleCopyRunCmd = () => {
+    navigator.clipboard.writeText(runCommand);
+    setCopiedRunCmd(true);
+    setTimeout(() => setCopiedRunCmd(false), 2500);
+  };
+
+  const handleCopyWinRmCmd = () => {
+    navigator.clipboard.writeText(remoteWinRmCommand);
+    setCopiedWinRmCmd(true);
+    setTimeout(() => setCopiedWinRmCmd(false), 2500);
+  };
+
+  const handleDownloadScript = () => {
+    if (!sessionId) return;
+    const link = document.createElement('a');
+    link.href = `/api/deployments/live/${sessionId}/run`;
+    link.download = `Deploy-${machineName || 'Workstation'}.ps1`;
+    link.click();
   };
 
   const completedStepsCount = steps.filter((s) => s.status === 'success').length;
@@ -395,40 +309,63 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
           <div className="space-y-1.5">
-            <div className="flex items-center space-x-2">
-              <span className={`w-3 h-3 rounded-full ${isDeploying ? 'bg-emerald-400 animate-ping' : isFinished ? 'bg-emerald-400' : 'bg-slate-500'}`}></span>
+            <div className="flex items-center space-x-2.5">
+              <span
+                className={`w-3.5 h-3.5 rounded-full ${
+                  sessionStatus === 'running'
+                    ? 'bg-cyan-400 animate-ping'
+                    : sessionStatus === 'completed'
+                    ? 'bg-emerald-400'
+                    : sessionStatus === 'failed'
+                    ? 'bg-rose-500'
+                    : 'bg-amber-400 animate-pulse'
+                }`}
+              ></span>
               <h1 className="text-xl font-extrabold text-white">
                 Workstation Provisioning Execution Cockpit
               </h1>
+              <span
+                className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full font-bold border ${
+                  sessionStatus === 'running'
+                    ? 'bg-cyan-950 text-cyan-300 border-cyan-800'
+                    : sessionStatus === 'completed'
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                    : sessionStatus === 'failed'
+                    ? 'bg-rose-950 text-rose-300 border-rose-800'
+                    : 'bg-amber-950 text-amber-300 border-amber-800'
+                }`}
+              >
+                {sessionStatus === 'waiting_for_connection'
+                  ? 'Waiting for Connection'
+                  : sessionStatus === 'running'
+                  ? 'Live Stream Connected'
+                  : sessionStatus === 'completed'
+                  ? 'Completed (ExitCode 0)'
+                  : 'Failed'}
+              </span>
             </div>
-            <p className="text-xs text-slate-400">
-              Target Machine: <strong className="text-cyan-400 font-mono">{machineName || '$env:COMPUTERNAME'}</strong> • Customer:{' '}
+            <p className="text-xs text-slate-400 flex items-center space-x-2 flex-wrap gap-y-1">
+              <span>Target Machine:</span>
+              <strong className="text-cyan-400 font-mono bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">
+                {machineName || '$env:COMPUTERNAME'}
+              </strong>
+              {targetIp && targetIp !== 'Unresolved (DNS)' && (
+                <span className="text-slate-400 font-mono text-[11px]">({targetIp})</span>
+              )}
+              <span className="text-slate-600">•</span>
+              <span>Customer:</span>
               <strong className="text-white">{customer.companyName}</strong> ({customer.domainName})
             </p>
           </div>
 
           {/* Action Controls */}
-          <div className="flex items-center space-x-3 self-start lg:self-auto">
-            {!isFinished && (
-              <button
-                onClick={() => setIsPaused(!isPaused)}
-                className={`flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-                  isPaused
-                    ? 'bg-emerald-950 border-emerald-800 text-emerald-300 hover:bg-emerald-900'
-                    : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
-                }`}
-              >
-                {isPaused ? <Play className="w-4 h-4 fill-emerald-300" /> : <Pause className="w-4 h-4" />}
-                <span>{isPaused ? 'Resume Pipeline' : 'Pause Pipeline'}</span>
-              </button>
-            )}
-
+          <div className="flex items-center space-x-3 self-start lg:self-auto flex-wrap gap-y-2">
             <button
               onClick={handleRestart}
               className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold transition-all cursor-pointer"
             >
               <RotateCcw className="w-4 h-4" />
-              <span>Rerun Pipeline</span>
+              <span>Reset & New Session</span>
             </button>
 
             {isFinished && (
@@ -443,8 +380,192 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
           </div>
         </div>
 
+        {/* Target Reachability & Remote Execution Control Panel */}
+        <div className="mt-5 p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-850 pb-3">
+            <div className="flex items-center space-x-3">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-300 font-mono flex items-center space-x-1.5">
+                <Radio className="w-4 h-4 text-emerald-400" />
+                <span>Remote Execution Channel</span>
+              </span>
+              <span className="flex items-center space-x-2">
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold border ${
+                    agentConnected
+                      ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                      : 'bg-slate-900 text-slate-400 border-slate-750'
+                  }`}
+                >
+                  Agent: {agentConnected ? 'Installed & Reporting' : 'Not Installed'}
+                </span>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold border ${
+                    winrmReachable
+                      ? 'bg-cyan-950 text-cyan-300 border-cyan-800'
+                      : 'bg-slate-900 text-slate-400 border-slate-750'
+                  }`}
+                >
+                  WinRM (5985): {winrmReachable ? 'Open & Ready' : 'Closed / LAN Only'}
+                </span>
+              </span>
+            </div>
+
+            {/* Execution Channel Tabs */}
+            <div className="flex items-center space-x-1 bg-slate-900 p-1 rounded-lg border border-slate-800 text-[11px]">
+              <button
+                onClick={() => setActiveExecTab('direct')}
+                className={`px-2.5 py-1 rounded font-medium transition-all ${
+                  activeExecTab === 'direct'
+                    ? 'bg-emerald-700 text-white font-bold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                1-Click Host Runner
+              </button>
+              <button
+                onClick={() => setActiveExecTab('winrm')}
+                className={`px-2.5 py-1 rounded font-medium transition-all ${
+                  activeExecTab === 'winrm'
+                    ? 'bg-cyan-700 text-white font-bold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                WinRM Push
+              </button>
+              <button
+                onClick={() => setActiveExecTab('agent')}
+                className={`px-2.5 py-1 rounded font-medium transition-all ${
+                  activeExecTab === 'agent'
+                    ? 'bg-blue-700 text-white font-bold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Client Agent
+              </button>
+              <button
+                onClick={() => setActiveExecTab('dryrun')}
+                className={`px-2.5 py-1 rounded font-medium transition-all ${
+                  activeExecTab === 'dryrun'
+                    ? 'bg-purple-700 text-white font-bold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Dry-Run Simulation
+              </button>
+            </div>
+          </div>
+
+          {/* Tab 1: 1-Click Host Command */}
+          {activeExecTab === 'direct' && (
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center justify-between text-slate-300">
+                <span>
+                  Paste & run in an elevated (Administrator) PowerShell prompt on{' '}
+                  <strong className="text-cyan-400 font-mono">{machineName || '$env:COMPUTERNAME'}</strong>:
+                </span>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={handleCopyRunCmd}
+                    className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center space-x-1 cursor-pointer"
+                  >
+                    {copiedRunCmd ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedRunCmd ? 'Copied Command!' : 'Copy Command'}</span>
+                  </button>
+                  <button
+                    onClick={handleDownloadScript}
+                    className="px-2.5 py-1 rounded bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 border border-cyan-700 flex items-center space-x-1 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download .ps1</span>
+                  </button>
+                </div>
+              </div>
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 font-mono text-emerald-300 text-[11px] select-all break-all leading-relaxed">
+                {runCommand || 'Generating session command...'}
+              </div>
+              <p className="text-[11px] text-slate-400 italic">
+                * As soon as this command starts on the machine, live progress and package installers will stream into the console below in real-time.
+              </p>
+            </div>
+          )}
+
+          {/* Tab 2: WinRM Remote Push */}
+          {activeExecTab === 'winrm' && (
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center justify-between text-slate-300">
+                <span>
+                  Push execution remotely from your administrative jump host or domain controller:
+                </span>
+                <button
+                  onClick={handleCopyWinRmCmd}
+                  className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center space-x-1 cursor-pointer"
+                >
+                  {copiedWinRmCmd ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedWinRmCmd ? 'Copied WinRM!' : 'Copy WinRM Command'}</span>
+                </button>
+              </div>
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 font-mono text-cyan-300 text-[11px] select-all break-all leading-relaxed">
+                {remoteWinRmCommand || 'Generating WinRM command...'}
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Requires PowerShell Remoting / WinRM enabled on target (ports 5985/5986).
+              </p>
+            </div>
+          )}
+
+          {/* Tab 3: Autonomous Client Agent */}
+          {activeExecTab === 'agent' && (
+            <div className="space-y-2 text-xs text-slate-300">
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-white">
+                    Autonomous Scheduled Task Dispatch
+                  </span>
+                  <span className="text-[11px] font-mono text-emerald-400">Task Queued in Agent Pool</span>
+                </div>
+                <p className="text-slate-400">
+                  A software deployment task has been placed into the FDIM Agent Queue for{' '}
+                  <strong className="text-white">{machineName}</strong>.
+                  {agentConnected ? (
+                    ' The client agent running as NT AUTHORITY\\SYSTEM will execute this unattended on its next heartbeat interval.'
+                  ) : (
+                    ' Note: The FDIM Client Agent is not yet detected on this computer. Use the 1-Click Host Runner or WinRM Push above, or deploy the client agent.'
+                  )}
+                </p>
+                <div className="pt-2 border-t border-slate-800 flex items-center space-x-2 text-[11px]">
+                  <span className="text-slate-400">To trigger the agent immediately on the machine:</span>
+                  <code className="bg-slate-950 px-2 py-0.5 rounded text-cyan-300 font-mono">
+                    schtasks /run /tn "FDIM-ClientAgent"
+                  </code>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Tab 4: Dry-Run Test Simulation */}
+          {activeExecTab === 'dryrun' && (
+            <div className="space-y-2 text-xs text-slate-300">
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between">
+                <div>
+                  <h4 className="font-bold text-white">Simulate Pipeline (Dry-Run Preview)</h4>
+                  <p className="text-slate-400 mt-0.5">
+                    Test the workflow and terminal in the browser without modifying any target machine.
+                  </p>
+                </div>
+                <button
+                  onClick={handleStartSimulation}
+                  disabled={isSimulating || sessionStatus === 'running'}
+                  className="px-4 py-2 rounded-xl bg-purple-700 hover:bg-purple-600 text-white font-bold text-xs transition-all shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {isSimulating ? 'Simulating...' : 'Run Test Simulation'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Progress Bar & Stats */}
-        <div className="mt-6 pt-5 border-t border-slate-800 grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+        <div className="mt-5 pt-4 border-t border-slate-800 grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
           <div className="md:col-span-2 space-y-1.5">
             <div className="flex justify-between text-slate-300 font-medium">
               <span>Overall Provisioning Progress</span>
@@ -472,53 +593,6 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
             </span>
           </div>
         </div>
-
-        {/* Execution Identity & Helpdesk Delegation Bar */}
-        <div className="mt-4 p-3 bg-slate-950/80 rounded-xl border border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-          <div className="flex items-center space-x-2">
-            <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span className="font-semibold text-slate-200">Execution Identity:</span>
-            <span className="text-slate-400 hidden md:inline">
-              (Delegated service account for Helpdesk staff without local administrative rights)
-            </span>
-          </div>
-
-          <div className="flex items-center space-x-1.5">
-            <button
-              onClick={() => setExecutionIdentity('service_account')}
-              className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-semibold transition-all ${
-                executionIdentity === 'service_account'
-                  ? 'bg-emerald-950 border border-emerald-700 text-emerald-300'
-                  : 'bg-slate-900 text-slate-400 hover:text-white'
-              }`}
-              title="Runs under configured Service Account (CORP\svc_fdim_runner)"
-            >
-              CORP\svc_fdim_runner (Delegated)
-            </button>
-            <button
-              onClick={() => setExecutionIdentity('agent_system')}
-              className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-semibold transition-all ${
-                executionIdentity === 'agent_system'
-                  ? 'bg-blue-950 border border-blue-700 text-blue-300'
-                  : 'bg-slate-900 text-slate-400 hover:text-white'
-              }`}
-              title="Dispatched to client agent running as NT AUTHORITY\SYSTEM"
-            >
-              Client Agent (SYSTEM)
-            </button>
-            <button
-              onClick={() => setExecutionIdentity('technician')}
-              className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-semibold transition-all ${
-                executionIdentity === 'technician'
-                  ? 'bg-cyan-950 border border-cyan-700 text-cyan-300'
-                  : 'bg-slate-900 text-slate-400 hover:text-white'
-              }`}
-              title="Runs under current technician interactive token"
-            >
-              Technician Token
-            </button>
-          </div>
-        </div>
       </div>
 
       {/* Main Grid: Pipeline Step Timeline (Left) & Realtime PowerShell Terminal (Right) */}
@@ -531,19 +605,23 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
               <span>Deployment Task Pipeline</span>
             </h3>
             <span className="text-[11px] font-mono text-slate-400">
-              {steps.length} Tasks Queued
+              {steps.length} Tasks Staged
             </span>
           </div>
 
           <div className="space-y-2.5 overflow-y-auto flex-1 pr-1">
-            {steps.map((step, idx) => {
-              const isCurrent = idx === currentStepIndex && isDeploying;
+            {steps.map((step) => {
+              const isCurrent = step.status === 'running';
               return (
                 <div
                   key={step.id}
                   className={`p-3 rounded-xl border transition-all text-xs flex items-start space-x-3 ${
                     step.status === 'success'
                       ? 'bg-emerald-950/20 border-emerald-800/60 text-slate-200'
+                      : step.status === 'warn'
+                      ? 'bg-amber-950/20 border-amber-800/60 text-slate-200'
+                      : step.status === 'error'
+                      ? 'bg-rose-950/20 border-rose-800/60 text-slate-200'
                       : isCurrent
                       ? 'bg-cyan-950/40 border-cyan-500 shadow-md ring-1 ring-cyan-500/50'
                       : 'bg-slate-950/60 border-slate-850 text-slate-400'
@@ -551,6 +629,8 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
                 >
                   <div className="mt-0.5 shrink-0">
                     {step.status === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                    {step.status === 'warn' && <AlertCircle className="w-4 h-4 text-amber-400" />}
+                    {step.status === 'error' && <AlertCircle className="w-4 h-4 text-rose-500" />}
                     {isCurrent && (
                       <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
                     )}
@@ -600,7 +680,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
           {/* Console Container */}
           <div className="flex-1 bg-slate-950 border border-slate-850 rounded-xl p-4 font-mono text-xs overflow-y-auto leading-relaxed space-y-1.5 selection:bg-cyan-600 selection:text-white">
             <div className="text-slate-500 pb-1 border-b border-slate-850">
-              # FDIM ({getFdimExpansion(showProfanity !== false)}) Deployment Session: {customer.companyName} [{machineName || '$env:COMPUTERNAME'}]
+              # FDIM ({getFdimExpansion(showProfanity !== false)}) Live Session: {customer.companyName} [{machineName || '$env:COMPUTERNAME'}]
             </div>
 
             {filteredLogs.map((log, index) => (

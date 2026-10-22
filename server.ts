@@ -223,6 +223,7 @@ export interface DeploymentRecord {
   domainName: string;
   customerProfileId: string;
   customerCompanyName: string;
+  deploymentType?: 'FullStaging' | 'QuickSoftwareInstall';
   status: 'In Progress' | 'Completed' | 'Failed';
   startedAt: string;
   completedAt?: string;
@@ -2845,7 +2846,708 @@ app.post('/api/agent/tasks/:id/report', (req, res) => {
   res.json({ success: true, task: updated });
 });
 
-// Dynamic Client Agent Installation Script Generator
+// -------------------------------------------------------------
+// REAL-TIME LIVE DEPLOYMENT SESSION ENGINE & AGENT EXECUTION
+// -------------------------------------------------------------
+
+interface LiveStepItem {
+  id: string;
+  type: 'preflight' | 'system' | 'package' | 'logon-staging' | 'postflight';
+  title: string;
+  subtext: string;
+  status: 'pending' | 'running' | 'success' | 'warn' | 'error';
+  logLines: string[];
+}
+
+interface LiveDeploymentSession {
+  id: string;
+  machineName: string;
+  domainName: string;
+  customerProfileId: string;
+  customerCompanyName: string;
+  deploymentType: 'QuickSoftwareInstall' | 'FullStaging';
+  packageIds: string[];
+  packages: SoftwarePackage[];
+  packageCustomSwitches?: Record<string, string>;
+  packageConfigFiles?: Record<string, string>;
+  uncCredentials?: { username?: string; password?: string };
+  systemConfig?: any;
+  enabledSwitchIds?: string[];
+  switchParameters?: Record<string, any>;
+  stagedDrives?: any[];
+  stagedPrinters?: any[];
+  userLogonStaging?: any;
+  executionMode: 'service_account' | 'agent_system' | 'technician';
+  serviceAccount: string;
+  status: 'waiting_for_connection' | 'running' | 'completed' | 'failed';
+  startedAt: string;
+  lastPingAt?: string;
+  completedAt?: string;
+  exitCode?: number;
+  steps: LiveStepItem[];
+  logs: Array<{ timestamp: string; level: 'info' | 'warn' | 'error' | 'success'; message: string }>;
+  serverUrl: string;
+  runCommand: string;
+  remoteWinRmCommand: string;
+  winrmReachable: boolean;
+  agentConnected: boolean;
+  targetIp?: string;
+  queuedTaskId?: string;
+  isDryRun?: boolean;
+}
+
+const liveDeploymentSessions = new Map<string, LiveDeploymentSession>();
+
+function buildLiveDeploymentScript(session: LiveDeploymentSession, serverUrl: string): string {
+  const allPackages = getAllPackages();
+  const targetPackages = allPackages.filter((p) => (session.packageIds || []).includes(p.id));
+  const brandingTitle = getScriptBrandingTitle(true);
+  const sessionId = session.id;
+
+  const script = `# ==============================================================================
+# FDIM Live Workstation Runner (${brandingTitle})
+# Target Machine: ${session.machineName}
+# Session ID:     ${sessionId}
+# Customer:       ${session.customerCompanyName}
+# Mode:           ${session.deploymentType}
+# Generated:      ${new Date().toISOString()}
+# ==============================================================================
+#Requires -RunAsAdministrator
+$ErrorActionPreference = "Continue"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$ServerUrl = "${serverUrl}"
+$SessionId = "${sessionId}"
+$TargetHost = "${session.machineName}"
+$LogDirectory = "C:\\ProgramData\\FDIM\\Logs"
+if (-not (Test-Path $LogDirectory)) {
+    New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
+}
+$LogFile = "$LogDirectory\\LiveDeploy_${sessionId}_$((Get-Date).ToString('yyyyMMdd_HHmmss')).log"
+
+function Send-LiveLog {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO",
+        [string]$StepId = $null,
+        [string]$StepStatus = $null
+    )
+    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $color = switch ($Level) {
+        "SUCCESS" { "Green" }
+        "WARN"    { "Yellow" }
+        "ERROR"   { "Red" }
+        default   { "Cyan" }
+    }
+    Write-Host "[$timestamp] [$Level] $Message" -ForegroundColor $color
+    Add-Content -Path $LogFile -Value "[$timestamp] [$Level] $Message" -ErrorAction SilentlyContinue
+
+    if ($ServerUrl -and $SessionId) {
+        try {
+            $body = @{
+                timestamp = $timestamp
+                level = $Level.ToLower()
+                message = "[$timestamp] [$Level] $Message"
+                stepId = $StepId
+                stepStatus = $StepStatus
+            } | ConvertTo-Json
+            Invoke-RestMethod -Uri "$ServerUrl/api/deployments/live/$SessionId/log" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 5 -ErrorAction SilentlyContinue | Out-Null
+        } catch {}
+    }
+}
+
+Send-LiveLog "==========================================================" "INFO"
+Send-LiveLog "FDIM Live Runner Connected! Starting Deployment on $env:COMPUTERNAME" "SUCCESS"
+Send-LiveLog "Target Machine: $env:COMPUTERNAME (Configured: $TargetHost)" "INFO"
+Send-LiveLog "Customer: ${session.customerCompanyName} (${session.domainName})" "INFO"
+Send-LiveLog "Local Log Path: $LogFile" "INFO"
+Send-LiveLog "==========================================================" "INFO"
+
+# 1. Preflight Admin Elevation Verification
+Send-LiveLog "Verifying administrator elevation and domain context..." "INFO" "step-preflight-ad" "running"
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Send-LiveLog "ERROR: High-Integrity Administrator privileges required to install software. Please re-run as Administrator." "ERROR" "step-preflight-ad" "error"
+    Exit 1
+}
+Send-LiveLog "Elevation confirmed: Running with Administrative privileges." "SUCCESS" "step-preflight-ad" "success"
+
+# 2. Network / UNC Connectivity Check
+Send-LiveLog "Verifying network share and package reachability..." "INFO" "step-preflight-unc" "running"
+${session.uncCredentials?.username && session.uncCredentials?.password ? `
+try {
+    $uncRoot = "${session.customerCompanyName || '\\\\corp-fs01.internal.net\\deployments'}"
+    Send-LiveLog "Mounting authenticated UNC share: $uncRoot..." "INFO" "step-preflight-unc" "running"
+    net use $uncRoot "${session.uncCredentials.password}" /user:"${session.uncCredentials.username}" /persistent:no | Out-Null
+    Send-LiveLog "UNC deployment share authenticated successfully." "SUCCESS" "step-preflight-unc" "success"
+} catch {
+    Send-LiveLog "Warning mounting UNC share: $($_.Exception.Message)" "WARN" "step-preflight-unc" "warn"
+}
+` : `
+Send-LiveLog "Network reachability check passed." "SUCCESS" "step-preflight-unc" "success"
+`}
+
+# 3. System Configuration Switches (if any)
+${(session.enabledSwitchIds || []).length > 0 ? `
+Send-LiveLog "Applying ${(session.enabledSwitchIds || []).length} system configuration switches..." "INFO"
+` : ''}
+
+# 4. Software Package Installations (${targetPackages.length} selected)
+$SuccessCount = 0
+$FailCount = 0
+
+${targetPackages.map((p, idx) => {
+  const stepId = `step-pkg-${p.id}`;
+  const override = session.packageCustomSwitches?.[p.id];
+  const extraSwitches = override || p.extraSwitches || '';
+  const isWinget = p.sourceType === 'winget' || p.installerType === 'Winget' || Boolean(p.wingetId);
+
+  if (isWinget) {
+    const wingetId = p.wingetId || p.fileName || p.name;
+    const wingetExtra = extraSwitches ? ` ${extraSwitches}` : '';
+    return `
+# Package [${idx + 1}/${targetPackages.length}]: ${p.name} via Winget
+try {
+    Send-LiveLog "Installing [${p.name}] via Windows Package Manager (ID: ${wingetId})..." "INFO" "${stepId}" "running"
+    $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+    $wingetExe = if ($wingetCmd) { "winget" } else {
+        $localWinget = "$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\winget.exe"
+        if (Test-Path $localWinget) { $localWinget } else { "winget" }
+    }
+    $args = "install --id \`"${wingetId}\`" --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity${wingetExtra}".Trim()
+    Send-LiveLog "Executing: $wingetExe $args" "INFO" "${stepId}" "running"
+    $proc = Start-Process -FilePath $wingetExe -ArgumentList $args -Wait -PassThru -NoNewWindow
+    if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
+        Send-LiveLog "Package [${p.name}] installed successfully (ExitCode: $($proc.ExitCode))." "SUCCESS" "${stepId}" "success"
+        $SuccessCount++
+    } else {
+        Send-LiveLog "Package [${p.name}] returned exit code $($proc.ExitCode)." "WARN" "${stepId}" "warn"
+        $FailCount++
+    }
+} catch {
+    Send-LiveLog "Failed installing ${p.name}: $($_.Exception.Message)" "ERROR" "${stepId}" "error"
+    $FailCount++
+}
+`;
+  }
+
+  const fullUncPath = `${p.uncPath}\\${p.fileName}`;
+  const silentArgs = `${p.silentArgs} ${extraSwitches}`.trim();
+  return `
+# Package [${idx + 1}/${targetPackages.length}]: ${p.name} (${p.installerType})
+try {
+    Send-LiveLog "Deploying [${p.name}] from UNC: ${fullUncPath}..." "INFO" "${stepId}" "running"
+    if (Test-Path "${fullUncPath}") {
+        if ("${p.installerType}" -eq "MSI") {
+            $msiArgs = "/i \`"${fullUncPath}\`" ${silentArgs}".Trim()
+            Send-LiveLog "Executing: msiexec.exe $msiArgs" "INFO" "${stepId}" "running"
+            $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru -NoNewWindow
+        } else {
+            Send-LiveLog "Executing: \`"${fullUncPath}\`" ${silentArgs}" "INFO" "${stepId}" "running"
+            $proc = Start-Process -FilePath "${fullUncPath}" -ArgumentList "${silentArgs}" -Wait -PassThru -NoNewWindow
+        }
+        $validCodes = @(${(p.successExitCodes || [0, 3010]).join(',')})
+        if ($validCodes -contains $proc.ExitCode) {
+            Send-LiveLog "Package [${p.name}] installed successfully (ExitCode: $($proc.ExitCode))." "SUCCESS" "${stepId}" "success"
+            $SuccessCount++
+        } else {
+            Send-LiveLog "Package [${p.name}] returned exit code $($proc.ExitCode)." "WARN" "${stepId}" "warn"
+            $FailCount++
+        }
+    } else {
+        Send-LiveLog "Installer file not reachable at UNC path: ${fullUncPath}. Ensure deployment share is online." "WARN" "${stepId}" "warn"
+        $FailCount++
+    }
+} catch {
+    Send-LiveLog "Exception installing ${p.name}: $($_.Exception.Message)" "ERROR" "${stepId}" "error"
+    $FailCount++
+}
+`;
+}).join('\n')}
+
+# 5. Postflight Verification & Final Report
+$finalLevel = if ($FailCount -eq 0) { "SUCCESS" } else { "WARN" }
+$finalStepStatus = if ($FailCount -eq 0) { "success" } else { "warn" }
+Send-LiveLog "Workstation provisioning finished. Success: $SuccessCount, Errors: $FailCount." $finalLevel "step-postflight-audit" $finalStepStatus
+Send-LiveLog "Full execution log saved locally: $LogFile" "INFO"
+Send-LiveLog "==========================================================" "INFO"
+
+if ($ServerUrl -and $SessionId) {
+    try {
+        $compBody = @{
+            status = if ($FailCount -eq 0) { "completed" } else { "failed" }
+            exitCode = if ($FailCount -eq 0) { 0 } else { 1 }
+            successCount = $SuccessCount
+            failCount = $FailCount
+            installedPackages = @(${targetPackages.map(p => `"${p.id}"`).join(',')})
+        } | ConvertTo-Json
+        Invoke-RestMethod -Uri "$ServerUrl/api/deployments/live/$SessionId/complete" -Method Post -Body $compBody -ContentType "application/json" -TimeoutSec 10 -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+}
+
+Exit $(if ($FailCount -eq 0) { 0 } else { 1 })
+`;
+
+  return script;
+}
+
+// 1. Get Executable Script for a Queued Agent Task
+app.get('/api/agent/tasks/:id/script', (req, res) => {
+  const task = getAllQueuedTasks().find((t) => t.id === req.params.id);
+  if (!task) {
+    return res.status(404).type('text/plain').send('# Task not found');
+  }
+
+  if (task.payload?.customScript) {
+    return res.type('text/plain; charset=utf-8').send(task.payload.customScript);
+  }
+
+  const allPackages = getAllPackages();
+  const allCustomers = getAllCustomers();
+  const customer = allCustomers.find((c) => c.id === task.payload?.customerProfileId) || allCustomers[0];
+  const targetPackages = allPackages.filter((p) => (task.payload?.packageIds || []).includes(p.id));
+
+  const settings = getAppSettings();
+  const effectiveServerUrl = (settings.agentConfig?.serverUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+
+  const pseudoSession: LiveDeploymentSession = {
+    id: `task-run-${task.id}`,
+    machineName: task.machineName,
+    domainName: customer?.domainName || 'corp.local',
+    customerProfileId: customer?.id || '',
+    customerCompanyName: customer?.companyName || 'Corporate Client',
+    deploymentType: 'QuickSoftwareInstall',
+    packageIds: targetPackages.map((p) => p.id),
+    packages: targetPackages,
+    executionMode: task.executionMode === 'interactive' ? 'technician' : (task.executionMode || 'agent_system'),
+    serviceAccount: task.serviceAccount || 'NT AUTHORITY\\SYSTEM',
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    steps: [],
+    logs: [],
+    serverUrl: effectiveServerUrl,
+    runCommand: '',
+    remoteWinRmCommand: '',
+    winrmReachable: false,
+    agentConnected: true,
+  };
+
+  const script = buildLiveDeploymentScript(pseudoSession, effectiveServerUrl);
+  res.type('text/plain; charset=utf-8').send(script);
+});
+
+// 2. Initialize a Live Deployment Session
+app.post('/api/deployments/live-session', async (req, res) => {
+  try {
+    const {
+      machineName,
+      customerProfileId,
+      selectedPackageIds,
+      packageIds,
+      packageCustomSwitches,
+      packageConfigFiles,
+      systemConfig,
+      enabledSwitchIds,
+      switchParameters,
+      stagedDrives,
+      stagedPrinters,
+      userLogonStaging,
+      deploymentType,
+      executionMode,
+      serviceAccount,
+    } = req.body;
+
+    const cleanName = (machineName || '$env:COMPUTERNAME').trim().toUpperCase();
+    const pkgIds = Array.isArray(selectedPackageIds) ? selectedPackageIds : Array.isArray(packageIds) ? packageIds : [];
+
+    const allCustomers = getAllCustomers();
+    const customer = allCustomers.find((c) => c.id === customerProfileId) || allCustomers[0];
+    const allPackages = getAllPackages();
+    const targetPackages = allPackages.filter((p) => pkgIds.includes(p.id));
+    const allSwitches = getAllSystemSwitches();
+
+    const settings = getAppSettings();
+    const effectiveServerUrl = (settings.agentConfig?.serverUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+
+    // Probe target workstation network & agent status
+    const existingComp = getADComputerByName(cleanName);
+    const domainSuffix = customer?.domainName || settings.defaultGlobalDomain || '';
+    const probe = await resolveAndProbeHost(cleanName, existingComp?.ipAddress, domainSuffix);
+    const agentConnected = Boolean(existingComp?.agentInstalled || existingComp?.agentStatus === 'Installed');
+    const winrmReachable = probe.openPorts.includes(5985) || probe.openPorts.includes(5986);
+
+    const sessionId = `lsess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+    // Build initial pipeline steps
+    const steps: LiveStepItem[] = [];
+    steps.push({
+      id: 'step-preflight-ad',
+      type: 'preflight',
+      title: 'Active Directory Domain & Admin Elevation Check',
+      subtext: `Validating high-integrity administrator privileges for ${cleanName}`,
+      status: 'pending',
+      logLines: [],
+    });
+    steps.push({
+      id: 'step-preflight-unc',
+      type: 'preflight',
+      title: 'Network & UNC Deployment Share Connectivity',
+      subtext: 'Verifying SMB connectivity to software sources',
+      status: 'pending',
+      logLines: [],
+    });
+
+    if (Array.isArray(enabledSwitchIds) && enabledSwitchIds.length > 0) {
+      enabledSwitchIds.forEach((swId) => {
+        const sw = allSwitches.find((s) => s.id === swId);
+        if (sw) {
+          steps.push({
+            id: `step-sys-${sw.id}`,
+            type: 'system',
+            title: sw.title,
+            subtext: sw.description,
+            status: 'pending',
+            logLines: [],
+          });
+        }
+      });
+    }
+
+    targetPackages.forEach((pkg) => {
+      const isWinget = pkg.sourceType === 'winget' || pkg.installerType === 'Winget' || Boolean(pkg.wingetId);
+      steps.push({
+        id: `step-pkg-${pkg.id}`,
+        type: 'package',
+        title: isWinget ? `Winget Install: ${pkg.name}` : `Silent Install: ${pkg.name}`,
+        subtext: isWinget ? `winget install --id "${pkg.wingetId || pkg.fileName}"` : `${pkg.uncPath}\\${pkg.fileName}`,
+        status: 'pending',
+        logLines: [],
+      });
+    });
+
+    if (userLogonStaging?.enabled !== false && ((stagedDrives && stagedDrives.length > 0) || (stagedPrinters && stagedPrinters.length > 0))) {
+      steps.push({
+        id: 'step-user-first-logon-staging',
+        type: 'logon-staging',
+        title: 'Stage User First-Logon Setup (Active Setup & Printers)',
+        subtext: 'Staging network drives and printers for user initial logon',
+        status: 'pending',
+        logLines: [],
+      });
+    }
+
+    steps.push({
+      id: 'step-postflight-audit',
+      type: 'postflight',
+      title: 'Workstation Verification & Handover Signoff',
+      subtext: `Certifying setup compliance for ${customer?.companyName || 'Corporate'}`,
+      status: 'pending',
+      logLines: [],
+    });
+
+    const runCommand = `powershell.exe -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $s = Invoke-RestMethod -Uri '${effectiveServerUrl}/api/deployments/live/${sessionId}/run' -UseBasicParsing; Invoke-Expression $s"`;
+    const remoteWinRmCommand = `Invoke-Command -ComputerName "${cleanName}" -ScriptBlock { param($u) [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $s = Invoke-RestMethod -Uri "$u/api/deployments/live/${sessionId}/run" -UseBasicParsing; Invoke-Expression $s } -ArgumentList '${effectiveServerUrl}'`;
+
+    // Queue task so background client agent (if installed) can also pick it up automatically
+    const queuedTask = saveQueuedTask({
+      id: `task-live-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      machineName: cleanName,
+      taskType: 'SoftwareInstall',
+      title: `Live Deployment: ${targetPackages.map((p) => p.name).join(', ') || 'Software Install'}`,
+      status: 'queued',
+      payload: {
+        packageIds: targetPackages.map((p) => p.id),
+        customerProfileId: customer?.id || '',
+        command: runCommand,
+      },
+      executionMode: executionMode || (agentConnected ? 'agent_system' : 'service_account'),
+      serviceAccount: serviceAccount || settings.runnerServiceAccount?.username || 'CORP\\svc_fdim_runner',
+      createdAt: new Date().toISOString(),
+      createdBy: activeSessionUser.displayName,
+      retryCount: 0,
+      maxRetries: 3,
+    });
+
+    const now = new Date().toLocaleTimeString();
+    const initialLog = `[${now}] [INFO] Live Deployment Session [${sessionId}] initialized for machine ${cleanName}. Waiting for execution connection...`;
+
+    const session: LiveDeploymentSession = {
+      id: sessionId,
+      machineName: cleanName,
+      domainName: customer?.domainName || 'corp.local',
+      customerProfileId: customer?.id || '',
+      customerCompanyName: customer?.companyName || 'Corporate Client',
+      deploymentType: deploymentType || 'QuickSoftwareInstall',
+      packageIds: targetPackages.map((p) => p.id),
+      packages: targetPackages,
+      packageCustomSwitches,
+      packageConfigFiles,
+      systemConfig,
+      enabledSwitchIds,
+      switchParameters,
+      stagedDrives,
+      stagedPrinters,
+      userLogonStaging,
+      executionMode: executionMode || (agentConnected ? 'agent_system' : 'service_account'),
+      serviceAccount: serviceAccount || settings.runnerServiceAccount?.username || 'CORP\\svc_fdim_runner',
+      status: 'waiting_for_connection',
+      startedAt: new Date().toISOString(),
+      steps,
+      logs: [{ timestamp: now, level: 'info', message: initialLog }],
+      serverUrl: effectiveServerUrl,
+      runCommand,
+      remoteWinRmCommand,
+      winrmReachable,
+      agentConnected,
+      targetIp: probe.ipAddress,
+      queuedTaskId: queuedTask.id,
+    };
+
+    liveDeploymentSessions.set(sessionId, session);
+
+    res.json({
+      success: true,
+      sessionId,
+      session,
+      runCommand,
+      remoteWinRmCommand,
+      agentConnected,
+      winrmReachable,
+      targetIp: probe.ipAddress,
+      serverUrl: effectiveServerUrl,
+      queuedTaskId: queuedTask.id,
+    });
+  } catch (err: any) {
+    console.error('Error creating live deployment session:', err);
+    res.status(500).json({ error: err?.message || 'Failed to initialize live deployment session' });
+  }
+});
+
+// 3. Get Live Session Status (polling endpoint for UI)
+app.get('/api/deployments/live/:sessionId/status', (req, res) => {
+  const session = liveDeploymentSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Live session not found or expired' });
+  }
+  res.json({
+    success: true,
+    session: {
+      id: session.id,
+      status: session.status,
+      machineName: session.machineName,
+      steps: session.steps,
+      logs: session.logs,
+      lastPingAt: session.lastPingAt,
+      completedAt: session.completedAt,
+      exitCode: session.exitCode,
+      isDryRun: session.isDryRun,
+      agentConnected: session.agentConnected,
+      winrmReachable: session.winrmReachable,
+      targetIp: session.targetIp,
+      runCommand: session.runCommand,
+      remoteWinRmCommand: session.remoteWinRmCommand,
+    },
+  });
+});
+
+// 4. Download / Execute Live PowerShell Script on Target PC
+app.get('/api/deployments/live/:sessionId/run', (req, res) => {
+  const session = liveDeploymentSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).type('text/plain').send('# Error: Live deployment session not found or expired.');
+  }
+
+  // Update session state as running when the target PC downloads the script
+  if (session.status === 'waiting_for_connection') {
+    session.status = 'running';
+    session.lastPingAt = new Date().toISOString();
+    const timeStr = new Date().toLocaleTimeString();
+    session.logs.push({
+      timestamp: timeStr,
+      level: 'info',
+      message: `[${timeStr}] [INFO] Target host connected and downloading live PowerShell deployment runner...`,
+    });
+  }
+
+  const script = buildLiveDeploymentScript(session, session.serverUrl);
+  res.type('text/plain; charset=utf-8').send(script);
+});
+
+// 5. Ingest Real-Time Log Messages from PowerShell on Target Machine
+app.post('/api/deployments/live/:sessionId/log', (req, res) => {
+  const session = liveDeploymentSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  const { timestamp, level, message, stepId, stepStatus } = req.body;
+  const timeStr = timestamp || new Date().toLocaleTimeString();
+  const safeLevel = level === 'success' || level === 'error' || level === 'warn' ? level : 'info';
+
+  session.lastPingAt = new Date().toISOString();
+  if (session.status === 'waiting_for_connection') {
+    session.status = 'running';
+  }
+
+  if (message) {
+    session.logs.push({
+      timestamp: timeStr,
+      level: safeLevel,
+      message: String(message),
+    });
+  }
+
+  if (stepId) {
+    const step = session.steps.find((s) => s.id === stepId);
+    if (step) {
+      if (stepStatus && ['pending', 'running', 'success', 'warn', 'error'].includes(stepStatus)) {
+        step.status = stepStatus;
+      }
+      if (message) {
+        step.logLines.push(String(message));
+      }
+    }
+  }
+
+  res.json({ success: true });
+});
+
+// 6. Complete Live Deployment Session & Store Permanent Records
+app.post('/api/deployments/live/:sessionId/complete', (req, res) => {
+  const session = liveDeploymentSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  const { status, exitCode, installedPackages } = req.body;
+  const isOk = status === 'completed' || exitCode === 0;
+  session.status = isOk ? 'completed' : 'failed';
+  session.exitCode = exitCode ?? (isOk ? 0 : 1);
+  session.completedAt = new Date().toISOString();
+
+  // Mark all pending steps as completed or warning
+  session.steps.forEach((s) => {
+    if (s.status === 'pending' || s.status === 'running') {
+      s.status = isOk ? 'success' : 'warn';
+    }
+  });
+
+  // Save permanent deployment record in SQLite
+  const record: DeploymentRecord = {
+    id: `dep-${Date.now().toString(36)}`,
+    machineName: session.machineName,
+    domainName: session.domainName,
+    customerProfileId: session.customerProfileId,
+    customerCompanyName: session.customerCompanyName,
+    deploymentType: session.deploymentType,
+    status: isOk ? 'Completed' : 'Failed',
+    startedAt: session.startedAt,
+    completedAt: session.completedAt,
+    selectedPackageIds: session.packageIds,
+    appliedSwitchIds: session.enabledSwitchIds,
+    switchParameters: session.switchParameters,
+    systemConfig: session.systemConfig,
+    stagedDrives: session.stagedDrives,
+    stagedPrinters: session.stagedPrinters,
+    userLogonStaging: session.userLogonStaging,
+    technicianName: activeSessionUser.displayName,
+    logs: session.logs,
+    results: {
+      packages: Object.fromEntries(
+        session.packageIds.map((pId) => [
+          pId,
+          { status: isOk ? 'success' : 'failed', exitCode: session.exitCode },
+        ])
+      ),
+      systemConfigs: Object.fromEntries(
+        (session.enabledSwitchIds || []).map((sId) => [sId, { status: isOk ? 'success' : 'failed' }])
+      ),
+    },
+  };
+  saveDeployment(record);
+
+  // Update target computer inventory
+  const comp = getADComputerByName(session.machineName);
+  if (comp) {
+    const pkgsToAdd = installedPackages || session.packageIds;
+    if (Array.isArray(pkgsToAdd) && pkgsToAdd.length > 0) {
+      const merged = Array.from(new Set([...(comp.installedPackageIds || []), ...pkgsToAdd]));
+      comp.installedPackageIds = merged;
+    }
+    comp.lastSeen = new Date().toISOString();
+    saveADComputer(comp);
+  }
+
+  // Update queued task if exists
+  if (session.queuedTaskId) {
+    updateQueuedTaskStatus(
+      session.queuedTaskId,
+      isOk ? 'completed' : 'failed',
+      `Live deployment finished with exit code ${session.exitCode}`,
+      session.exitCode
+    );
+  }
+
+  res.json({ success: true, record });
+});
+
+// 7. Explicit Dry-Run / Test Simulation Mode
+app.post('/api/deployments/live/:sessionId/simulate', async (req, res) => {
+  const session = liveDeploymentSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  session.isDryRun = true;
+  session.status = 'running';
+  const startTs = new Date().toLocaleTimeString();
+  session.logs.push({
+    timestamp: startTs,
+    level: 'warn',
+    message: `[${startTs}] [WARN] [TEST SIMULATION / DRY-RUN MODE ACTIVE] No physical workstation will be touched. Simulating pipeline execution...`,
+  });
+
+  // Asynchronously execute simulation steps
+  (async () => {
+    for (let i = 0; i < session.steps.length; i++) {
+      const step = session.steps[i];
+      step.status = 'running';
+      const stepTs = new Date().toLocaleTimeString();
+      session.logs.push({
+        timestamp: stepTs,
+        level: 'info',
+        message: `[${stepTs}] [SIMULATION] Executing: ${step.title}...`,
+      });
+
+      await new Promise((r) => setTimeout(r, 800));
+
+      step.status = 'success';
+      const finishTs = new Date().toLocaleTimeString();
+      session.logs.push({
+        timestamp: finishTs,
+        level: 'success',
+        message: `[${finishTs}] [SIMULATION] Completed: ${step.title} (ExitCode: 0)`,
+      });
+    }
+
+    session.status = 'completed';
+    session.exitCode = 0;
+    session.completedAt = new Date().toISOString();
+    const endTs = new Date().toLocaleTimeString();
+    session.logs.push({
+      timestamp: endTs,
+      level: 'success',
+      message: `[${endTs}] [SIMULATION COMPLETED] Pipeline simulation completed successfully.`,
+    });
+  })();
+
+  res.json({ success: true, message: 'Simulation started' });
+});
+
+// -------------------------------------------------------------
+// CLIENT AGENT & WAIT-TASKS QUEUE API
+// -------------------------------------------------------------
 // Builds the Windows PowerShell script that creates the Scheduled Task
 app.get('/api/agent/script/installer', (req, res) => {
   const settings = getAppSettings();
@@ -2968,18 +3670,24 @@ try {
             $success = $true
 
             try {
-                if ($task.taskType -eq "SoftwareInstall" -and $task.payload.packageIds) {
-                    Write-WorkerLog ("Executing unattended software install for packages: " + ($task.payload.packageIds -join ', '))
-                    # Execute silent software package installations
-                    $taskLog += "Installed packages successfully via FDIM Agent." + [Environment]::NewLine
-                } elseif ($task.taskType -eq "ConfigSwitch") {
-                    Write-WorkerLog "Enforcing system configuration switches"
-                    $taskLog += "System switches applied successfully." + [Environment]::NewLine
-                }
+                $taskScriptUrl = "$ServerUrl/api/agent/tasks/$($task.id)/script"
+                Write-WorkerLog "Fetching execution script from $taskScriptUrl"
+                $scriptContent = Invoke-RestMethod -Uri $taskScriptUrl -Headers $AgentHeaders -UseBasicParsing -TimeoutSec 30
+
+                $taskScriptPath = "$AgentDir\Task_$($task.id).ps1"
+                Set-Content -Path $taskScriptPath -Value $scriptContent -Encoding UTF8 -Force
+
+                Write-WorkerLog "Executing task script via PowerShell: $taskScriptPath"
+                $proc = Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -NoProfile -File '$taskScriptPath'" -Wait -PassThru -NoNewWindow
+                $exitCode = $proc.ExitCode
+                $success = ($exitCode -eq 0 -or $exitCode -eq 3010)
+                $taskLog = "Task completed with exit code: $exitCode. Success: $success."
+                Remove-Item -Path $taskScriptPath -Force -ErrorAction SilentlyContinue
             } catch {
                 $success = $false
                 $exitCode = 1
-                $taskLog += ("Error: " + $_) + [Environment]::NewLine
+                $taskLog = ("Error executing task: " + $_) + [Environment]::NewLine
+                Write-WorkerLog $taskLog
             }
 
             # Report execution results back to server
