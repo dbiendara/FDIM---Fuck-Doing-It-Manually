@@ -116,7 +116,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
   const [taskQueuedMessage, setTaskQueuedMessage] = useState<string | null>(null);
   const [activeExecTab, setActiveExecTab] = useState<'direct' | 'winrm' | 'agent' | 'dryrun'>('direct');
 
-  const terminalEndRef = useRef<HTMLDivElement>(null);
+  const terminalContainerRef = useRef<HTMLDivElement>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // 1. Initialize Live Session on Backend
@@ -282,9 +282,11 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
     return () => clearInterval(timer);
   }, [sessionStatus, isPaused, isFinished]);
 
-  // Auto-scroll terminal
+  // Auto-scroll terminal container ONLY (without scrolling the page window)
   useEffect(() => {
-    terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (terminalContainerRef.current) {
+      terminalContainerRef.current.scrollTop = terminalContainerRef.current.scrollHeight;
+    }
   }, [logs]);
 
   // Handle dry-run test simulation
@@ -753,7 +755,10 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
           </div>
 
           {/* Console Container */}
-          <div className="flex-1 bg-slate-950 border border-slate-850 rounded-xl p-4 font-mono text-xs overflow-y-auto leading-relaxed space-y-1.5 selection:bg-cyan-600 selection:text-white">
+          <div
+            ref={terminalContainerRef}
+            className="flex-1 bg-slate-950 border border-slate-850 rounded-xl p-4 font-mono text-xs overflow-y-auto leading-relaxed space-y-1.5 selection:bg-cyan-600 selection:text-white"
+          >
             <div className="text-slate-500 pb-1 border-b border-slate-850">
               # FDIM ({getFdimExpansion(showProfanity !== false)}) Live Session: {customer.companyName} [{machineName || '$env:COMPUTERNAME'}]
             </div>
@@ -774,8 +779,6 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
                 {log.message}
               </div>
             ))}
-
-            <div ref={terminalEndRef} />
           </div>
         </div>
       </div>
