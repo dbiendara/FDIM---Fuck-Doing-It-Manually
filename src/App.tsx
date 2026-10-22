@@ -500,7 +500,8 @@ export default function App() {
     packageOverrides: Record<string, { extraSwitches?: string }>;
     uncCredentials?: { username?: string; password?: string };
   }) => {
-    setMachineName(config.machineName.startsWith('$') ? 'WS-CLIENT-01' : config.machineName);
+    const target = config.machineName?.trim() || machineName || '$env:COMPUTERNAME';
+    setMachineName(target);
     setSelectedCustomerId(config.customer.id);
     setSelectedPackageIds(config.selectedPackages.map((p) => p.id));
     const customSwitches: Record<string, string> = {};
@@ -648,6 +649,8 @@ export default function App() {
             packages={packages}
             customers={customers}
             defaultDomain={appSettings.defaultGlobalDomain}
+            initialMachineName={machineName}
+            initialCustomerId={selectedCustomerId}
             onRunQuickDeployment={handleRunQuickDeployment}
           />
         )}

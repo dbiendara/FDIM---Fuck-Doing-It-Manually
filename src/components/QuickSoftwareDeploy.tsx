@@ -33,6 +33,8 @@ interface QuickSoftwareDeployProps {
   packages: SoftwarePackage[];
   customers: CustomerProfile[];
   defaultDomain?: string;
+  initialMachineName?: string;
+  initialCustomerId?: string;
   onRunQuickDeployment: (config: {
     machineName: string;
     customer: CustomerProfile;
@@ -46,10 +48,27 @@ export const QuickSoftwareDeploy: React.FC<QuickSoftwareDeployProps> = ({
   packages,
   customers,
   defaultDomain,
+  initialMachineName,
+  initialCustomerId,
   onRunQuickDeployment,
 }) => {
-  const [targetMachine, setTargetMachine] = useState('$env:COMPUTERNAME');
-  const [selectedCustomerId, setSelectedCustomerId] = useState(customers[0]?.id || '');
+  const [targetMachine, setTargetMachine] = useState(initialMachineName || '$env:COMPUTERNAME');
+  const [selectedCustomerId, setSelectedCustomerId] = useState(
+    initialCustomerId || customers[0]?.id || ''
+  );
+
+  // Sync state whenever selected machine or customer changes from parent
+  React.useEffect(() => {
+    if (initialMachineName) {
+      setTargetMachine(initialMachineName);
+    }
+  }, [initialMachineName]);
+
+  React.useEffect(() => {
+    if (initialCustomerId) {
+      setSelectedCustomerId(initialCustomerId);
+    }
+  }, [initialCustomerId]);
   const [selectedPkgIds, setSelectedPkgIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
@@ -222,15 +241,31 @@ export const QuickSoftwareDeploy: React.FC<QuickSoftwareDeployProps> = ({
             <label className="block text-xs font-medium text-slate-300 mb-1.5">
               Target Computer Name / IP:
             </label>
-            <input
-              type="text"
-              value={targetMachine}
-              onChange={(e) => setTargetMachine(e.target.value)}
-              placeholder="$env:COMPUTERNAME or WS-CORP-01"
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
-            />
-            <span className="text-[10px] text-slate-500 mt-1 block">
-              Leave as <code>$env:COMPUTERNAME</code> to run directly on the local machine.
+            <div className="relative">
+              <input
+                type="text"
+                value={targetMachine}
+                onChange={(e) => setTargetMachine(e.target.value)}
+                placeholder="$env:COMPUTERNAME or WS-CORP-01"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
+              />
+              {targetMachine !== '$env:COMPUTERNAME' && (
+                <button
+                  type="button"
+                  onClick={() => setTargetMachine('$env:COMPUTERNAME')}
+                  title="Reset to local $env:COMPUTERNAME"
+                  className="absolute right-2 top-2 text-[10px] text-slate-400 hover:text-cyan-300 font-mono px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 cursor-pointer"
+                >
+                  Local
+                </button>
+              )}
+            </div>
+            <span className="text-[10px] text-slate-500 mt-1 flex items-center justify-between">
+              {targetMachine && targetMachine !== '$env:COMPUTERNAME' ? (
+                <span className="text-cyan-400 font-mono font-medium">Selected Target PC: {targetMachine}</span>
+              ) : (
+                <span>Leave as <code>$env:COMPUTERNAME</code> to run on the active local machine.</span>
+              )}
             </span>
           </div>
 
