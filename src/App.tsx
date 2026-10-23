@@ -26,6 +26,7 @@ import { AuditCertificateModal } from './components/AuditCertificateModal';
 import { SystemConfigManager } from './components/SystemConfigManager';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginModal } from './components/LoginModal';
+import { LoginScreen } from './components/LoginScreen';
 import { SetupWizardModal } from './components/SetupWizardModal';
 import { ADComputersView } from './components/ADComputersView';
 import { ClientAgentQueueView } from './components/ClientAgentQueueView';
@@ -82,18 +83,19 @@ export default function App() {
     },
   });
 
-  const [currentUser, setCurrentUser] = useState<AuthUser>(() => {
-    const profanityPref = loadUserProfanityPreference('usr-admin', true);
-    return {
-      id: 'usr-admin',
-      username: 'admin',
-      displayName: 'FDIM Domain Administrator',
-      domain: 'CORP',
-      role: 'Administrator',
-      authProvider: 'local',
-      avatarInitials: 'DA',
-      showProfanity: profanityPref,
-    };
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    // If the user has explicitly logged out, keep them logged out
+    if (localStorage.getItem('fdim_logged_out') === 'true') {
+      return null;
+    }
+    const saved = localStorage.getItem('fdim_auth_user');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.id) return parsed;
+      } catch {}
+    }
+    return null;
   });
 
   // Modals state
@@ -163,10 +165,12 @@ export default function App() {
   }, []);
 
   const handleToggleProfanity = async () => {
+    if (!currentUser) return;
     const nextVal = currentUser.showProfanity === false ? true : false;
     saveUserProfanityPreference(currentUser.id, nextVal);
     const updatedUser = { ...currentUser, showProfanity: nextVal };
     setCurrentUser(updatedUser);
+    localStorage.setItem('fdim_auth_user', JSON.stringify(updatedUser));
     try {
       await fetch('/api/auth/preferences', {
         method: 'POST',
@@ -176,6 +180,27 @@ export default function App() {
     } catch (err) {
       console.warn('Failed to sync profanity preference:', err);
     }
+  };
+
+  const handleLoginSuccess = (user: AuthUser) => {
+    const userPref = loadUserProfanityPreference(user.id, user.showProfanity !== false);
+    const userObj = { ...user, showProfanity: userPref };
+    localStorage.removeItem('fdim_logged_out');
+    localStorage.setItem('fdim_auth_user', JSON.stringify(userObj));
+    setCurrentUser(userObj);
+    setIsLoginModalOpen(false);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {
+      console.error('Logout error:', e);
+    }
+    localStorage.setItem('fdim_logged_out', 'true');
+    localStorage.removeItem('fdim_auth_user');
+    setCurrentUser(null);
+    setIsLoginModalOpen(false);
   };
 
   // Initial data loading
@@ -206,8 +231,13 @@ export default function App() {
           }
         }
         if (auth?.user) {
-          const userPref = loadUserProfanityPreference(auth.user.id, auth.user.showProfanity !== false);
-          setCurrentUser({ ...auth.user, showProfanity: userPref });
+          const isExplicitlyLoggedOut = localStorage.getItem('fdim_logged_out') === 'true';
+          if (!isExplicitlyLoggedOut) {
+            const userPref = loadUserProfanityPreference(auth.user.id, auth.user.showProfanity !== false);
+            const userObj = { ...auth.user, showProfanity: userPref };
+            setCurrentUser(userObj);
+            localStorage.setItem('fdim_auth_user', JSON.stringify(userObj));
+          }
         }
 
         // Check if there is an active draft saved in local storage
@@ -572,6 +602,17 @@ export default function App() {
 
   const selectedPackages = packages.filter((p) => selectedPackageIds.includes(p.id));
 
+  // If not authenticated, present the professional Login Screen
+  if (!currentUser) {
+    return (
+      <LoginScreen
+        appSettings={appSettings}
+        onLoginSuccess={handleLoginSuccess}
+        showProfanity={true}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
       {/* Top Navbar */}
@@ -585,6 +626,7 @@ export default function App() {
         appSettings={appSettings}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenLogin={() => setIsLoginModalOpen(true)}
+        onLogout={handleLogout}
         onToggleProfanity={handleToggleProfanity}
         onOpenSetupWizard={() => setIsSetupWizardOpen(true)}
       />
@@ -810,7 +852,7 @@ export default function App() {
             applyCorporateTheme(newSets.corporateColors);
           }
         }}
-        showProfanity={currentUser.showProfanity !== false}
+        showProfanity={currentUser?.showProfanity !== false}
         onToggleProfanity={handleToggleProfanity}
         onOpenSetupWizard={() => {
           setIsSettingsModalOpen(false);
@@ -824,7 +866,8 @@ export default function App() {
         onClose={() => setIsLoginModalOpen(false)}
         currentUser={currentUser}
         appSettings={appSettings}
-        onUserChanged={(usr) => setCurrentUser(usr)}
+        onUserChanged={handleLoginSuccess}
+        onLogout={handleLogout}
       />
 
       {/* Initial Setup & Active Directory Onboarding Wizard */}

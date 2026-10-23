@@ -969,17 +969,8 @@ setInterval(() => {
   }
 }, 15000);
 
-// In-memory session tracking for active technician
-let activeSessionUser: AuthUser = {
-  id: 'usr-admin',
-  username: 'admin',
-  displayName: 'FDIM Domain Administrator',
-  domain: 'CORP',
-  role: 'Administrator',
-  authProvider: 'local',
-  avatarInitials: 'DA',
-  showProfanity: true,
-};
+// In-memory session tracking for active technician (null when logged out)
+let activeSessionUser: AuthUser | null = null;
 
 function getScriptBrandingTitle(allowProfanity?: boolean): string {
   const allow = allowProfanity !== undefined ? allowProfanity : (activeSessionUser?.showProfanity ?? true);
@@ -1093,7 +1084,7 @@ app.post('/api/snippets', (req, res) => {
     category: req.body.category || 'Custom',
     script: req.body.script || '',
     enabled: req.body.enabled !== false,
-    author: req.body.author || activeSessionUser.displayName,
+    author: req.body.author || activeSessionUser?.displayName || 'Administrator',
     tags: Array.isArray(req.body.tags) ? req.body.tags : [],
     isGlobalTemplate: req.body.isGlobalTemplate || false,
     ...req.body,
@@ -1136,7 +1127,7 @@ app.post('/api/deployments', (req, res) => {
     startedAt: req.body.startedAt || new Date().toISOString(),
     status: req.body.status || 'Completed',
     completedAt: req.body.completedAt || new Date().toISOString(),
-    technicianName: req.body.technicianName || activeSessionUser.displayName,
+    technicianName: req.body.technicianName || activeSessionUser?.displayName || 'Administrator',
     ...req.body,
   };
   saveDeployment(newRecord);
@@ -2409,7 +2400,7 @@ app.post('/api/ad-computers/deploy-agent', async (req, res) => {
           executionMode: 'service_account',
           serviceAccount: adminUsername || settings.runnerServiceAccount?.username || 'Administrator',
           createdAt: new Date().toISOString(),
-          createdBy: activeSessionUser.displayName,
+          createdBy: activeSessionUser?.displayName || 'System Admin',
           retryCount: 0,
           maxRetries: 3,
         });
@@ -2636,7 +2627,7 @@ app.post(['/api/agent/tasks', '/api/queued-tasks'], (req, res) => {
     executionMode: executionMode || (settings.runnerServiceAccount.enabled ? 'service_account' : 'agent_system'),
     serviceAccount: serviceAccount || settings.runnerServiceAccount.username,
     createdAt: new Date().toISOString(),
-    createdBy: createdBy || activeSessionUser.displayName,
+    createdBy: createdBy || activeSessionUser?.displayName || 'System Admin',
     retryCount: 0,
     maxRetries: 3,
   };
@@ -3481,7 +3472,7 @@ app.post('/api/deployments/live/:sessionId/complete', (req, res) => {
     stagedDrives: session.stagedDrives,
     stagedPrinters: session.stagedPrinters,
     userLogonStaging: session.userLogonStaging,
-    technicianName: activeSessionUser.displayName,
+    technicianName: activeSessionUser?.displayName || 'Admin (FDIM Live Runner)',
     logs: session.logs,
     results: {
       packages: Object.fromEntries(
@@ -3954,16 +3945,8 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
-  activeSessionUser = {
-    id: 'usr-guest',
-    username: 'technician',
-    displayName: 'MSP Field Engineer',
-    domain: 'CORP',
-    role: 'Technician',
-    authProvider: 'local',
-    avatarInitials: 'FE',
-  };
-  res.json({ success: true, user: activeSessionUser });
+  activeSessionUser = null;
+  res.json({ success: true, user: null });
 });
 
 app.post('/api/auth/test-ad', async (req, res) => {
@@ -4002,7 +3985,7 @@ app.post('/api/auth/test-ad', async (req, res) => {
 
 app.post('/api/auth/preferences', (req, res) => {
   const { showProfanity } = req.body;
-  if (typeof showProfanity === 'boolean') {
+  if (typeof showProfanity === 'boolean' && activeSessionUser) {
     activeSessionUser.showProfanity = showProfanity;
     try {
       saveUser(activeSessionUser);

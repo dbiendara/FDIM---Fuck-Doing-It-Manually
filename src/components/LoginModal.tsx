@@ -19,9 +19,10 @@ import { getFdimExpansion, saveUserProfanityPreference } from '../utils/branding
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentUser: AuthUser;
+  currentUser?: AuthUser | null;
   appSettings: AppSettings;
   onUserChanged: (user: AuthUser) => void;
+  onLogout?: () => void;
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({
@@ -30,7 +31,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   currentUser,
   appSettings,
   onUserChanged,
+  onLogout,
 }) => {
+  const activeUser = currentUser || {
+    id: 'usr-admin',
+    username: 'admin',
+    displayName: 'FDIM Domain Administrator',
+    domain: 'CORP',
+    role: 'Administrator',
+    authProvider: 'local' as const,
+    avatarInitials: 'DA',
+    showProfanity: true,
+  };
   const [authMode, setAuthMode] = useState<'ad' | 'keycloak' | 'local'>('ad');
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
@@ -41,9 +53,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   if (!isOpen) return null;
 
   const handleToggleProfanity = async () => {
-    const nextVal = currentUser.showProfanity === false ? true : false;
-    saveUserProfanityPreference(currentUser.id, nextVal);
-    const updatedUser = { ...currentUser, showProfanity: nextVal };
+    const nextVal = activeUser.showProfanity === false ? true : false;
+    saveUserProfanityPreference(activeUser.id, nextVal);
+    const updatedUser = { ...activeUser, showProfanity: nextVal };
     onUserChanged(updatedUser);
     try {
       await fetch('/api/auth/preferences', {
@@ -89,15 +101,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   const handleLogout = async () => {
     try {
-      const res = await fetch('/api/auth/logout', { method: 'POST' });
-      const data = await res.json();
-      if (data.user) {
-        onUserChanged(data.user);
-        onClose();
-      }
+      await fetch('/api/auth/logout', { method: 'POST' });
     } catch (err) {
       console.error('Logout error:', err);
     }
+    if (onLogout) {
+      onLogout();
+    }
+    onClose();
   };
 
   return (
@@ -113,13 +124,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         {/* Current User Header */}
         <div className="flex items-center space-x-3.5 mb-5 pb-4 border-b border-slate-800">
           <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-600 text-white font-bold flex items-center justify-center text-sm shadow-md shadow-cyan-600/30">
-            {currentUser.avatarInitials || 'DA'}
+            {activeUser.avatarInitials || 'DA'}
           </div>
           <div>
             <span className="text-xs text-slate-400 font-mono block">Logged In Technician</span>
-            <h3 className="text-sm font-bold text-white">{currentUser.displayName}</h3>
+            <h3 className="text-sm font-bold text-white">{activeUser.displayName}</h3>
             <span className="text-[11px] text-cyan-400 font-mono">
-              Role: {currentUser.role} • {currentUser.domain || 'Domain Member'}
+              Role: {activeUser.role} • {activeUser.domain || 'Domain Member'}
             </span>
           </div>
         </div>
@@ -130,7 +141,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             <div className="flex items-center space-x-2">
               <span
                 className={`w-2.5 h-2.5 rounded-full ${
-                  currentUser.showProfanity !== false ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'
+                  activeUser.showProfanity !== false ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'
                 }`}
               />
               <span className="text-xs font-bold text-white">Technician Acronym Setting</span>
@@ -139,13 +150,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               type="button"
               onClick={handleToggleProfanity}
               className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors focus:outline-none ${
-                currentUser.showProfanity !== false ? 'bg-amber-600' : 'bg-emerald-600'
+                activeUser.showProfanity !== false ? 'bg-amber-600' : 'bg-emerald-600'
               }`}
               title="Toggle uncensored vs corporate safe-for-work phrasing"
             >
               <span
                 className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                  currentUser.showProfanity !== false ? 'translate-x-5' : 'translate-x-1'
+                  activeUser.showProfanity !== false ? 'translate-x-5' : 'translate-x-1'
                 }`}
               />
             </button>
@@ -155,12 +166,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             <span className="text-slate-400 text-[11px]">Show word &quot;fuck&quot; in FDIM:</span>
             <span
               className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                currentUser.showProfanity !== false
+                activeUser.showProfanity !== false
                   ? 'bg-amber-950 text-amber-300 border border-amber-800'
                   : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
               }`}
             >
-              {currentUser.showProfanity !== false ? '⚡ Fuck Doing It Manually' : '🛡️ Forget Doing It Manually'}
+              {activeUser.showProfanity !== false ? '⚡ Fuck Doing It Manually' : '🛡️ Forget Doing It Manually'}
             </span>
           </div>
           <p className="text-[10px] text-slate-500 leading-tight">
@@ -330,18 +341,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           <button
             type="button"
             onClick={handleLogout}
-            className="text-xs text-red-400 hover:text-red-300 flex items-center space-x-1.5 transition-colors"
+            className="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-xs text-rose-300 hover:text-white flex items-center space-x-1.5 transition-colors cursor-pointer font-semibold shadow-sm"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Switch to Default Field Tech</span>
+            <span>Sign Out / Log Out</span>
           </button>
 
           <button
             type="button"
             onClick={onClose}
-            className="text-xs text-slate-400 hover:text-white"
+            className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg hover:bg-slate-800 transition-colors"
           >
-            Cancel
+            Close
           </button>
         </div>
       </div>

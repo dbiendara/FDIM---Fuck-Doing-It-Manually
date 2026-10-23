@@ -21,6 +21,7 @@ import {
   X,
   ExternalLink,
   Wand2,
+  LogOut,
 } from 'lucide-react';
 import { AuthUser, AppSettings } from '../types';
 import { getFdimExpansion } from '../utils/branding';
@@ -44,10 +45,11 @@ interface HeaderProps {
   machineName: string;
   selectedCustomerName: string;
   isDeploying: boolean;
-  currentUser?: AuthUser;
+  currentUser?: AuthUser | null;
   appSettings?: AppSettings;
   onOpenSettings?: () => void;
   onOpenLogin?: () => void;
+  onLogout?: () => void;
   onToggleProfanity?: () => void;
   onOpenSetupWizard?: () => void;
 }
@@ -62,6 +64,7 @@ export const Header: React.FC<HeaderProps> = ({
   appSettings,
   onOpenSettings,
   onOpenLogin,
+  onLogout,
   onToggleProfanity,
   onOpenSetupWizard,
 }) => {
@@ -531,20 +534,34 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
               )}
 
-              {onOpenLogin && (
-                <button
-                  type="button"
-                  onClick={onOpenLogin}
-                  className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
-                  title="Technician Profile & AD Login"
-                >
-                  <span className="w-5 h-5 rounded-md bg-cyan-950 border border-cyan-800 text-cyan-300 font-bold font-mono flex items-center justify-center text-[10px]">
-                    {currentUser?.avatarInitials || 'AD'}
-                  </span>
-                  <span className="hidden sm:inline font-mono text-[11px] max-w-[100px] truncate">
-                    {currentUser?.displayName || 'Admin'}
-                  </span>
-                </button>
+              {currentUser && (
+                <div className="flex items-center space-x-1.5">
+                  <button
+                    type="button"
+                    onClick={onOpenLogin}
+                    className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
+                    title="Technician Profile & AD Settings"
+                  >
+                    <span className="w-5 h-5 rounded-md bg-cyan-950 border border-cyan-800 text-cyan-300 font-bold font-mono flex items-center justify-center text-[10px]">
+                      {currentUser?.avatarInitials || 'AD'}
+                    </span>
+                    <span className="hidden sm:inline font-mono text-[11px] max-w-[110px] truncate">
+                      {currentUser?.displayName || 'Admin'}
+                    </span>
+                  </button>
+
+                  {onLogout && (
+                    <button
+                      type="button"
+                      onClick={onLogout}
+                      title="Log Out of FDIM"
+                      className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/70 border border-rose-800/60 hover:border-rose-700 text-xs text-rose-300 hover:text-white transition-all cursor-pointer shadow-sm"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline font-semibold">Log Out</span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           </div>
