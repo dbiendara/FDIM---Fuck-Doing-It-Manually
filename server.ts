@@ -3639,13 +3639,9 @@ function Write-WorkerLog {
     Add-Content -Path $LogFile -Value "[$ts] $Msg" -ErrorAction SilentlyContinue
 }
 
-# 1. Check LAN Reachability to FDIM Server
-$serverHost = ($ServerUrl -replace "^https?://", "").Split(":")[0]
-$ping = Test-Connection -ComputerName $serverHost -Count 1 -Quiet -ErrorAction SilentlyContinue
-if (-not $ping) {
-    Write-WorkerLog "FDIM Server [$serverHost] unreachable via ICMP/LAN. Skipping heartbeat."
-    exit 0
-}
+# 1. Transport & TLS Protocol Configuration
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}
 
 # 2. Gather Inventory & Metrics
 $os = (Get-CimInstance Win32_OperatingSystem).Caption

@@ -54,7 +54,7 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
   const [taskExecutionMode, setTaskExecutionMode] = useState<'agent_system' | 'service_account'>('agent_system');
 
   // Installer script generator
-  const [serverUrl, setServerUrl] = useState(() => `${window.location.protocol}//${window.location.hostname}:3000`);
+  const [serverUrl, setServerUrl] = useState(() => (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'));
   const [heartbeatInterval, setHeartbeatInterval] = useState(30);
   const [bootDelay, setBootDelay] = useState(5);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
