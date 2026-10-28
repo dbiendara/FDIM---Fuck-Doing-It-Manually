@@ -4,6 +4,7 @@ import {
   QueuedTask,
   CustomerProfile,
   SoftwarePackage,
+  ServerRunnerInfo,
 } from '../types';
 import {
   Radio,
@@ -29,6 +30,12 @@ import {
   ShieldCheck,
   Shield,
   FileText,
+  Server,
+  Zap,
+  Network,
+  ArrowRight,
+  ExternalLink,
+  Code2,
 } from 'lucide-react';
 
 interface ClientAgentQueueViewProps {
@@ -40,9 +47,11 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
   customers,
   packages,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'queue' | 'agents'>('queue');
+  const [activeSubTab, setActiveSubTab] = useState<'server-runner' | 'queue' | 'agents'>('server-runner');
   const [tasks, setTasks] = useState<QueuedTask[]>([]);
   const [computers, setComputers] = useState<ADComputer[]>([]);
+  const [serverRunner, setServerRunner] = useState<ServerRunnerInfo | null>(null);
+  const [isRunnerActive, setIsRunnerActive] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedTaskLog, setSelectedTaskLog] = useState<QueuedTask | null>(null);
 
@@ -52,6 +61,7 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
   const [selectedPackageIds, setSelectedPackageIds] = useState<string[]>([]);
   const [taskType, setTaskType] = useState<QueuedTask['taskType']>('SoftwareInstall');
   const [taskExecutionMode, setTaskExecutionMode] = useState<'agent_system' | 'service_account'>('agent_system');
+  const [runnerSetupMode, setRunnerSetupMode] = useState<'interactive' | 'service'>('interactive');
 
   // Installer script generator
   const [serverUrl, setServerUrl] = useState(() => (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'));
@@ -66,15 +76,22 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const [tasksRes, compsRes, settingsRes] = await Promise.all([
+      const [tasksRes, compsRes, settingsRes, runnerRes] = await Promise.all([
         fetch('/api/agent/tasks'),
         fetch('/api/ad-computers'),
         fetch('/api/settings').catch(() => null),
+        fetch('/api/server-runner/status').catch(() => null),
       ]);
       const tasksData = await tasksRes.json();
       const compsData = await compsRes.json();
       setTasks(tasksData);
       setComputers(compsData);
+
+      if (runnerRes && runnerRes.ok) {
+        const runnerData = await runnerRes.json();
+        setServerRunner(runnerData.runner);
+        setIsRunnerActive(Boolean(runnerData.active));
+      }
 
       if (settingsRes && settingsRes.ok) {
         const sets = await settingsRes.json();
@@ -211,18 +228,20 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
         </div>
 
         {/* Live Metrics Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-slate-800/80">
-          <div className="bg-slate-950/60 border border-blue-900/40 p-3 rounded-xl">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6 pt-6 border-t border-slate-800/80">
+          <div className={`bg-slate-950/60 border p-3 rounded-xl ${isRunnerActive ? 'border-emerald-800/60' : 'border-slate-800'}`}>
             <div className="flex items-center justify-between">
-              <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold block">Connected Agents</span>
-              <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
+              <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold block">Server Runner</span>
+              <span className={`w-2 h-2 rounded-full ${isRunnerActive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
             </div>
-            <span className="text-xl font-extrabold text-blue-400 mt-1 block">{agentComputers.length}</span>
+            <span className={`text-sm font-extrabold mt-1 block truncate ${isRunnerActive ? 'text-emerald-400' : 'text-slate-400'}`}>
+              {isRunnerActive ? 'Online (30s)' : 'Awaiting Start'}
+            </span>
           </div>
 
           <div className="bg-slate-950/60 border border-amber-900/40 p-3 rounded-xl">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold block">Queued Wait-Tasks</span>
+              <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold block">Queued Tasks</span>
               <Clock className="w-3.5 h-3.5 text-amber-400" />
             </div>
             <span className="text-xl font-extrabold text-amber-400 mt-1 block">{queuedCount}</span>
@@ -243,14 +262,39 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
             </div>
             <span className="text-xl font-extrabold text-emerald-400 mt-1 block">{completedCount}</span>
           </div>
+
+          <div className="bg-slate-950/60 border border-blue-900/40 p-3 rounded-xl">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold block">Client Daemons</span>
+              <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+            </div>
+            <span className="text-xl font-extrabold text-blue-400 mt-1 block">{agentComputers.length}</span>
+          </div>
         </div>
       </div>
 
       {/* Navigation Sub-Tabs */}
       <div className="flex border-b border-slate-800 text-xs font-semibold px-2">
         <button
+          onClick={() => setActiveSubTab('server-runner')}
+          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
+            activeSubTab === 'server-runner'
+              ? 'border-emerald-500 text-emerald-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Server className="w-4 h-4" />
+          <span>Central Server Runner (Zero-Agent WinRM)</span>
+          <span
+            className={`w-2 h-2 rounded-full ${
+              isRunnerActive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+            }`}
+          />
+        </button>
+
+        <button
           onClick={() => setActiveSubTab('queue')}
-          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors ${
+          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
             activeSubTab === 'queue'
               ? 'border-cyan-500 text-cyan-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -262,16 +306,293 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
 
         <button
           onClick={() => setActiveSubTab('agents')}
-          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors ${
+          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
             activeSubTab === 'agents'
               ? 'border-cyan-500 text-cyan-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
           <Radio className="w-4 h-4" />
-          <span>Active Client Agents & Compliance ({agentComputers.length})</span>
+          <span>Local Client Agents ({agentComputers.length})</span>
         </button>
       </div>
+
+      {/* VIEW 0: CENTRAL SERVER RUNNER (ZERO-AGENT REMOTE WINRM) */}
+      {activeSubTab === 'server-runner' && (
+        <div className="space-y-6">
+          {/* Status Banner */}
+          <div
+            className={`border rounded-2xl p-5 shadow-xl transition-all ${
+              isRunnerActive
+                ? 'bg-gradient-to-r from-emerald-950/60 via-slate-900 to-slate-900 border-emerald-800/80 shadow-emerald-950/20'
+                : 'bg-gradient-to-r from-amber-950/40 via-slate-900 to-slate-900 border-amber-800/60 shadow-amber-950/20'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start space-x-3.5">
+                <div
+                  className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border ${
+                    isRunnerActive
+                      ? 'bg-emerald-950 border-emerald-700 text-emerald-400 shadow-md shadow-emerald-900/30'
+                      : 'bg-amber-950 border-amber-800 text-amber-400'
+                  }`}
+                >
+                  <Server className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-sm font-bold text-white">
+                      {isRunnerActive ? 'Central Server Runner Online & Orchestrating' : 'Central Server Runner Offline / Awaiting Start'}
+                    </h3>
+                    <span
+                      className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-bold font-mono uppercase tracking-wider ${
+                        isRunnerActive
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                          : 'bg-amber-950 text-amber-300 border border-amber-800'
+                      }`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${isRunnerActive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                      <span>{isRunnerActive ? 'Polling Every 30s' : 'Not Connected'}</span>
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                    {isRunnerActive
+                      ? `Runner Host: ${serverRunner?.hostname || 'Management Server'} (${serverRunner?.ipAddress || 'LAN'}) • Version ${serverRunner?.version || '2.0.0'} • Total Remote Tasks Executed: ${serverRunner?.totalExecutedJobs ?? 0}`
+                      : 'Run the 1-liner command on your Windows Server to enable automatic 30-second remote WinRM provisioning. No client agent required.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2 shrink-0">
+                <button
+                  onClick={fetchData}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 flex items-center space-x-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Check Status</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Architecture Diagram: How 1-Click Zero-Agent Works */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+              <div className="flex items-center space-x-2">
+                <Zap className="w-4 h-4 text-emerald-400" />
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                  How 1-Click Zero-Agent Bootstrapping Works
+                </h4>
+              </div>
+              <span className="text-[11px] text-emerald-400 font-mono">Zero software needed on new PCs</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-xl flex flex-col justify-between">
+                <div>
+                  <div className="w-7 h-7 rounded-lg bg-cyan-950 border border-cyan-800 text-cyan-400 flex items-center justify-center font-bold text-xs mb-2">
+                    1
+                  </div>
+                  <h5 className="text-xs font-bold text-white mb-1">Click in Web Console</h5>
+                  <p className="text-[11px] text-slate-400 leading-normal">
+                    Select any target computer and click <strong>&quot;Push App&quot;</strong> or <strong>&quot;Deploy&quot;</strong>. The job is queued in FDIM.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-xl flex flex-col justify-between">
+                <div>
+                  <div className="w-7 h-7 rounded-lg bg-emerald-950 border border-emerald-800 text-emerald-400 flex items-center justify-center font-bold text-xs mb-2">
+                    2
+                  </div>
+                  <h5 className="text-xs font-bold text-white mb-1">Server Runner Polls (30s)</h5>
+                  <p className="text-[11px] text-slate-400 leading-normal">
+                    Your Central Server Daemon checks the queue every 30 seconds, claims the job, and downloads the deployment payload.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-xl flex flex-col justify-between">
+                <div>
+                  <div className="w-7 h-7 rounded-lg bg-purple-950 border border-purple-800 text-purple-400 flex items-center justify-center font-bold text-xs mb-2">
+                    3
+                  </div>
+                  <h5 className="text-xs font-bold text-white mb-1">Remote WinRM Push</h5>
+                  <p className="text-[11px] text-slate-400 leading-normal">
+                    The runner connects remotely across LAN to the client PC via PowerShell Remoting (<code className="text-purple-300">Invoke-Command</code>).
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-xl flex flex-col justify-between">
+                <div>
+                  <div className="w-7 h-7 rounded-lg bg-teal-950 border border-teal-800 text-teal-400 flex items-center justify-center font-bold text-xs mb-2">
+                    4
+                  </div>
+                  <h5 className="text-xs font-bold text-white mb-1">Unattended Execution</h5>
+                  <p className="text-[11px] text-slate-400 leading-normal">
+                    The client installs packages silently. Exit codes and logs stream back to your FDIM dashboard. 100% automated!
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Setup Instructions on the Management Server */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-800 gap-3">
+              <div>
+                <h4 className="text-sm font-bold text-white">Start the Runner on Your Management Server</h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Run on any Windows Server, domain controller, or management jump host on your local network
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setRunnerSetupMode('interactive')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    runnerSetupMode === 'interactive'
+                      ? 'bg-slate-800 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Interactive Console (Recommended for Testing)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRunnerSetupMode('service')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    runnerSetupMode === 'service'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Unattended Service / Scheduled Task (24/7)
+                </button>
+              </div>
+            </div>
+
+            {runnerSetupMode === 'interactive' ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Option A: Run in PowerShell Console (Live Real-Time Colored Logs)
+                  </span>
+                  <a
+                    href={`${serverUrl}/api/server-runner/script`}
+                    download="FDIM-ServerRunner.ps1"
+                    className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center space-x-1 font-semibold"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download .ps1</span>
+                  </a>
+                </div>
+
+                <div className="relative group">
+                  <pre className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap leading-relaxed select-all">
+                    {`[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}; $s = Invoke-RestMethod -Uri '${serverUrl}/api/server-runner/script' -UseBasicParsing; Invoke-Expression $s`}
+                  </pre>
+                  <button
+                    onClick={() =>
+                      copyToClipboard(
+                        `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}; $s = Invoke-RestMethod -Uri '${serverUrl}/api/server-runner/script' -UseBasicParsing; Invoke-Expression $s`,
+                        'interactive-runner'
+                      )
+                    }
+                    className="absolute top-3 right-3 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center space-x-1.5 shadow-md cursor-pointer"
+                  >
+                    {copiedKey === 'interactive-runner' ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-400">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Copy 1-Liner</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Tip: Keep this console open to watch the live output streaming as remote jobs are picked up and executed every 30 seconds.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Option B: Install Unattended Windows Scheduled Task (Runs 24/7 as SYSTEM)
+                  </span>
+                  <a
+                    href={`${serverUrl}/api/server-runner/install-service`}
+                    download="Install-FDIM-ServerRunner.ps1"
+                    className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center space-x-1 font-semibold"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download Installer</span>
+                  </a>
+                </div>
+
+                <div className="relative group">
+                  <pre className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap leading-relaxed select-all">
+                    {`[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}; $s = Invoke-RestMethod -Uri '${serverUrl}/api/server-runner/install-service' -UseBasicParsing; Invoke-Expression $s`}
+                  </pre>
+                  <button
+                    onClick={() =>
+                      copyToClipboard(
+                        `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}; $s = Invoke-RestMethod -Uri '${serverUrl}/api/server-runner/install-service' -UseBasicParsing; Invoke-Expression $s`,
+                        'service-runner'
+                      )
+                    }
+                    className="absolute top-3 right-3 px-3 py-1.5 rounded-lg bg-emerald-900/60 hover:bg-emerald-800/80 text-emerald-200 text-xs font-semibold border border-emerald-700/80 flex items-center space-x-1.5 shadow-md cursor-pointer"
+                  >
+                    {copiedKey === 'service-runner' ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-400">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Copy Service Installer</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Installs the <code className="text-cyan-300 font-mono">FDIM-CentralServerRunner</code> scheduled task running under <code className="text-cyan-300 font-mono">NT AUTHORITY\SYSTEM</code>. It starts at boot and stays alive continuously.
+                </p>
+              </div>
+            )}
+
+            {/* Client PC Prerequisites Box */}
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 space-y-2 mt-4">
+              <h5 className="text-xs font-bold text-white flex items-center space-x-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span>Client Workstation Prerequisites (Zero Agent Needed)</span>
+              </h5>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-slate-300 pt-1">
+                <div className="flex items-start space-x-2">
+                  <Check className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
+                  <span><strong>Zero software</strong> needs to be installed on target PCs beforehand.</span>
+                </div>
+                <div className="flex items-start space-x-2">
+                  <Check className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
+                  <span><strong>WinRM enabled:</strong> Active by default on Active Directory domain members (or run <code className="text-[11px] font-mono text-cyan-400">Enable-PSRemoting -Force</code>).</span>
+                </div>
+                <div className="flex items-start space-x-2">
+                  <Check className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
+                  <span><strong>Firewall port 5985 open:</strong> Allowed by default for Domain Profile in Windows Defender Firewall.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* VIEW 1: WAIT-TASKS QUEUE */}
       {activeSubTab === 'queue' && (

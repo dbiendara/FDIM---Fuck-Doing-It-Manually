@@ -307,6 +307,21 @@ export interface QueuedTask {
   createdBy: string;
   retryCount?: number;
   maxRetries?: number;
+  claimedByRunner?: string;
+  executor?: string;
+}
+
+export interface ServerRunnerInfo {
+  runnerId: string;
+  hostname: string;
+  ipAddress?: string;
+  version: string;
+  status: 'Online' | 'Busy' | 'Idle' | 'Offline';
+  lastPoll: string;
+  pollIntervalSec: number;
+  activeJobsCount: number;
+  totalExecutedJobs: number;
+  serviceAccount?: string;
 }
 
 export interface PackageSandboxTest {

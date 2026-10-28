@@ -50,7 +50,7 @@ import {
   deleteFirstRunSnippet,
   seedInitialFirstRunSnippetsIfEmpty,
 } from './server/db.ts';
-import { AuthUser, ADComputer, QueuedTask, PackageSandboxTest } from './src/types';
+import { AuthUser, ADComputer, QueuedTask, PackageSandboxTest, ServerRunnerInfo } from './src/types';
 
 const execFileAsync = promisify(execFile);
 
@@ -2836,6 +2836,336 @@ app.post('/api/agent/tasks/:id/report', (req, res) => {
   }
 
   res.json({ success: true, task: updated });
+});
+
+// -------------------------------------------------------------
+// CENTRAL SERVER RUNNER (REMOTE ZERO-AGENT WINRM ORCHESTRATOR)
+// -------------------------------------------------------------
+let centralServerRunner: ServerRunnerInfo | null = null;
+
+function generateServerRunnerScript(serverUrl: string, pollIntervalSec: number = 30, serviceAccount: string = '', pskToken: string = ''): string {
+  return `# ==============================================================================
+# FDIM Central Server Runner Daemon (Remote WinRM / Zero-Agent Orchestrator)
+# ==============================================================================
+# Target Host: Central Windows Server / Management Jump Host / Domain Controller
+# Polling Frequency: Every ${pollIntervalSec} seconds
+# Function: Checks FDIM for new jobs, reaches out to remote clients via WinRM,
+#           and provisions them unattended. Zero agent needed on client PCs!
+# ==============================================================================
+[CmdletBinding()]
+param(
+    [string]$ServerUrl = "${serverUrl}",
+    [int]$PollIntervalSec = ${pollIntervalSec},
+    [string]$AuthToken = "${pskToken}",
+    [switch]$SingleRun = $false
+)
+
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$ErrorActionPreference = "Continue"
+
+# TLS Protocol Configuration
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}
+
+$RunnerId = "SRV-RUNNER-$($env:COMPUTERNAME)"
+$RunnerVersion = "2.0.0-remote-orchestrator"
+$TotalJobs = 0
+
+Write-Host "========================================================================" -ForegroundColor Cyan
+Write-Host " FDIM Central Server Runner Daemon (Zero-Agent Remote WinRM)" -ForegroundColor Cyan
+Write-Host " Server: $ServerUrl | Polling: Every $PollIntervalSec seconds" -ForegroundColor Cyan
+Write-Host " Runner Host: $env:COMPUTERNAME ($RunnerId)" -ForegroundColor Cyan
+Write-Host "========================================================================" -ForegroundColor Cyan
+
+$Headers = @{
+    "Content-Type" = "application/json"
+}
+if ($AuthToken) {
+    $Headers["Authorization"] = "Bearer $AuthToken"
+    $Headers["X-FDIM-Agent-Token"] = $AuthToken
+}
+
+function Write-RunnerLog {
+    param([string]$Message, [string]$Color = "White")
+    $ts = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    Write-Host "[$ts] $Message" -ForegroundColor $Color
+}
+
+function Report-JobResult {
+    param(
+        [string]$TaskId,
+        [bool]$Success,
+        [int]$ExitCode,
+        [string]$LogOutput
+    )
+    try {
+        $reportPayload = @{
+            status = if ($Success) { "completed" } else { "failed" }
+            exitCode = $ExitCode
+            resultLog = $LogOutput
+            executor = "Central Server Runner ($env:COMPUTERNAME)"
+        } | ConvertTo-Json
+        Invoke-RestMethod -Uri "$ServerUrl/api/agent/tasks/$TaskId/report" -Method Post -Body $reportPayload -Headers $Headers -TimeoutSec 15 | Out-Null
+        Write-RunnerLog "Reported job [$TaskId] status to server: $(if ($Success) { 'COMPLETED' } else { 'FAILED' })" "Cyan"
+        $script:TotalJobs++
+    } catch {
+        Write-RunnerLog "Failed to report task result to server: $_" "Red"
+    }
+}
+
+function Execute-RemoteJob {
+    param([PSCustomObject]$Task)
+    
+    $taskId = $Task.id
+    $targetHost = $Task.machineName
+    $taskTitle = $Task.title
+    Write-RunnerLog ">> CLAIMED TASK [$taskId]: '$taskTitle' on Target Computer: [$targetHost]" "Yellow"
+    
+    # 1. Claim task on server
+    try {
+        $claimPayload = @{
+            status = "running"
+            claimedByRunner = $RunnerId
+            executor = "Central Server Runner ($env:COMPUTERNAME)"
+        } | ConvertTo-Json
+        Invoke-RestMethod -Uri "$ServerUrl/api/server-runner/tasks/$taskId/claim" -Method Post -Body $claimPayload -Headers $Headers -TimeoutSec 10 | Out-Null
+    } catch {
+        Write-RunnerLog "Notice: Task claim acknowledged." "Gray"
+    }
+
+    # 2. Download task script
+    $scriptUrl = "$ServerUrl/api/agent/tasks/$taskId/script"
+    Write-RunnerLog "Downloading execution script from $scriptUrl..." "Cyan"
+    $scriptContent = ""
+    try {
+        $scriptContent = Invoke-RestMethod -Uri $scriptUrl -Headers $Headers -UseBasicParsing -TimeoutSec 30
+    } catch {
+        $err = "Failed to download task script: $_"
+        Write-RunnerLog $err "Red"
+        Report-JobResult -TaskId $taskId -Success $false -ExitCode 1 -LogOutput $err
+        return
+    }
+
+    # 3. Check connectivity and execute remotely on target client PC via WinRM
+    Write-RunnerLog "Connecting remotely to client [$targetHost] via PowerShell Remoting (WinRM)..." "Cyan"
+    $exitCode = 0
+    $success = $false
+    $resultLog = ""
+    $startTime = Get-Date
+
+    try {
+        $remoteScriptBlock = {
+            param([string]$Code)
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+            try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}
+            
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            try {
+                Invoke-Expression $Code
+                $sw.Stop()
+                return "Remote execution completed successfully on $env:COMPUTERNAME in $([math]::Round($sw.Elapsed.TotalSeconds, 1))s."
+            } catch {
+                $sw.Stop()
+                throw "Remote execution error: $_"
+            }
+        }
+
+        # Invoke remote execution across network without needing an agent on client
+        $remoteOutput = Invoke-Command -ComputerName $targetHost -ScriptBlock $remoteScriptBlock -ArgumentList $scriptContent -ErrorAction Stop
+        $elapsedSec = [math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+        $success = $true
+        $exitCode = 0
+        $resultLog = "Successfully executed on remote workstation [$targetHost] in \${elapsedSec}s.\`n" + ($remoteOutput | Out-String)
+        Write-RunnerLog "++ Remote task [$taskId] completed on [$targetHost] in \${elapsedSec}s!" "Green"
+    } catch {
+        $elapsedSec = [math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+        $exitCode = 1
+        $success = $false
+        $errorMsg = $_.Exception.Message
+        $resultLog = "Remote WinRM execution failed on [$targetHost] after \${elapsedSec}s.\`nError: $errorMsg\`nTip: Ensure target PC is powered on, reachable on LAN, and WinRM is enabled (Enable-PSRemoting -Force)."
+        Write-RunnerLog "-- Remote execution failed on [$targetHost]: $errorMsg" "Red"
+    }
+
+    # 4. Report results back to server
+    Report-JobResult -TaskId $taskId -Success $success -ExitCode $exitCode -LogOutput $resultLog
+}
+
+# Main polling loop
+Write-RunnerLog "Starting Central Server Runner daemon. Polling every $PollIntervalSec seconds..." "Green"
+do {
+    try {
+        $pollPayload = @{
+            runnerId = $RunnerId
+            hostname = $env:COMPUTERNAME
+            version = $RunnerVersion
+            status = "Idle"
+            pollIntervalSec = $PollIntervalSec
+            totalExecutedJobs = $script:TotalJobs
+        } | ConvertTo-Json
+
+        $response = Invoke-RestMethod -Uri "$ServerUrl/api/server-runner/poll" -Method Post -Body $pollPayload -Headers $Headers -TimeoutSec 15
+        
+        if ($response.hasTasks -and $response.pendingTasks.Count -gt 0) {
+            Write-RunnerLog "Discovered $($response.pendingTasks.Count) pending job(s) ready for remote client dispatch." "Magenta"
+            foreach ($task in $response.pendingTasks) {
+                Execute-RemoteJob -Task $task
+            }
+        } else {
+            Write-Host -NoNewline "."
+        }
+    } catch {
+        Write-RunnerLog "Heartbeat check error: $_" "DarkYellow"
+    }
+
+    if ($SingleRun) { break }
+    Start-Sleep -Seconds $PollIntervalSec
+} while ($true)
+`;
+}
+
+function generateServerRunnerServiceInstaller(serverUrl: string, pollIntervalSec: number = 30): string {
+  return `# ==============================================================================
+# FDIM Central Server Runner Service Installer
+# ==============================================================================
+# Installs a continuous background Scheduled Task on this Windows Server:
+# Task Name: "FDIM-CentralServerRunner"
+# Runs as: NT AUTHORITY\\SYSTEM
+# Behavior: Starts at system boot and restarts automatically if terminated
+# ==============================================================================
+#Requires -RunAsAdministrator
+$ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+$ServerUrl = "${serverUrl}"
+$InstallDir = "C:\\ProgramData\\FDIM\\ServerRunner"
+$ScriptPath = "$InstallDir\\FDIM-ServerRunner.ps1"
+$TaskName = "FDIM-CentralServerRunner"
+
+if (-not (Test-Path $InstallDir)) {
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+}
+
+Write-Host "Downloading FDIM Central Server Runner script..." -ForegroundColor Cyan
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}
+
+$runnerScript = Invoke-RestMethod -Uri "$ServerUrl/api/server-runner/script" -UseBasicParsing
+Set-Content -Path $ScriptPath -Value $runnerScript -Encoding UTF8 -Force
+
+# Create or Update Scheduled Task
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$ScriptPath\`""
+$triggerBoot = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 365)
+
+# Unregister old task if present
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggerBoot -Principal $principal -Settings $settings -Description "FDIM Central Server Runner Daemon (Zero-Agent Remote WinRM Orchestrator)" | Out-Null
+Start-ScheduledTask -TaskName $TaskName
+
+Write-Host "==========================================================" -ForegroundColor Green
+Write-Host " FDIM Central Server Runner Installed Successfully!" -ForegroundColor Green
+Write-Host " Status: Running continuously in background" -ForegroundColor Green
+Write-Host " Task Name: $TaskName" -ForegroundColor Green
+Write-Host " Script Path: $ScriptPath" -ForegroundColor Green
+Write-Host " Polling: Every ${pollIntervalSec} seconds" -ForegroundColor Green
+Write-Host "==========================================================" -ForegroundColor Green
+`;
+}
+
+// 1. Get Central Server Runner Status
+app.get('/api/server-runner/status', (req, res) => {
+  const settings = getAppSettings();
+  const pollIntervalSec = 30;
+  let isOnline = false;
+  if (centralServerRunner) {
+    const elapsedSec = (Date.now() - new Date(centralServerRunner.lastPoll).getTime()) / 1000;
+    isOnline = elapsedSec < (pollIntervalSec * 2.5); // Online if polled in last 75 seconds
+    centralServerRunner.status = isOnline ? (centralServerRunner.activeJobsCount > 0 ? 'Busy' : 'Online') : 'Offline';
+  }
+  res.json({
+    active: isOnline,
+    runner: centralServerRunner,
+    pollIntervalSec,
+    serviceAccount: settings.runnerServiceAccount,
+  });
+});
+
+// 2. Poll & Heartbeat from Central Server Runner (Every 30 seconds)
+app.post('/api/server-runner/poll', (req, res) => {
+  const { runnerId, hostname, ip, version, totalExecutedJobs } = req.body;
+  const settings = getAppSettings();
+  const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+
+  centralServerRunner = {
+    runnerId: runnerId || `SRV-RUNNER-${(hostname || 'MGMT').toUpperCase()}`,
+    hostname: hostname || 'Central-Management-Server',
+    ipAddress: ip || clientIp,
+    version: version || '2.0.0-remote-orchestrator',
+    status: 'Online',
+    lastPoll: new Date().toISOString(),
+    pollIntervalSec: 30,
+    activeJobsCount: 0,
+    totalExecutedJobs: Number(totalExecutedJobs) || 0,
+    serviceAccount: settings.runnerServiceAccount?.username,
+  };
+
+  // Find all queued tasks
+  const allTasks = getAllQueuedTasks();
+  const pendingTasks = allTasks.filter((t) => t.status === 'queued' || t.status === 'Queued');
+
+  res.json({
+    success: true,
+    message: `Central Runner heartbeat acknowledged. ${pendingTasks.length} pending task(s) ready for remote execution.`,
+    pollIntervalSec: 30,
+    hasTasks: pendingTasks.length > 0,
+    pendingTasks,
+  });
+});
+
+// 3. Claim Task by Central Server Runner
+app.post('/api/server-runner/tasks/:id/claim', (req, res) => {
+  const { claimedByRunner, executor } = req.body;
+  const task = getAllQueuedTasks().find((t) => t.id === req.params.id);
+  if (!task) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+
+  task.status = 'running';
+  task.dispatchedAt = new Date().toISOString();
+  task.claimedByRunner = claimedByRunner || centralServerRunner?.runnerId || 'Central-Server-Runner';
+  task.executor = executor || `Central Server Runner (${centralServerRunner?.hostname || 'Server'})`;
+  saveQueuedTask(task);
+
+  if (centralServerRunner) {
+    centralServerRunner.activeJobsCount++;
+  }
+
+  res.json({ success: true, task });
+});
+
+// 4. Download Central Server Runner PowerShell Script
+app.get('/api/server-runner/script', (req, res) => {
+  const settings = getAppSettings();
+  const effectiveServerUrl = (req.query.serverUrl as string) || (settings.agentConfig?.serverUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  const pollInterval = parseInt(req.query.interval as string) || 30;
+  const serviceAccount = settings.runnerServiceAccount?.username || '';
+  const token = settings.agentConfig?.preSharedKey || '';
+
+  const script = generateServerRunnerScript(effectiveServerUrl, pollInterval, serviceAccount, token);
+  res.type('text/plain; charset=utf-8').send(script);
+});
+
+// 5. Download Central Server Runner Service / Scheduled Task Installer
+app.get('/api/server-runner/install-service', (req, res) => {
+  const settings = getAppSettings();
+  const effectiveServerUrl = (req.query.serverUrl as string) || (settings.agentConfig?.serverUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  const pollInterval = parseInt(req.query.interval as string) || 30;
+
+  const script = generateServerRunnerServiceInstaller(effectiveServerUrl, pollInterval);
+  res.type('text/plain; charset=utf-8').send(script);
 });
 
 // -------------------------------------------------------------
