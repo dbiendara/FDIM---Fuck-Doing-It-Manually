@@ -115,6 +115,14 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
   const [isQueueingTask, setIsQueueingTask] = useState(false);
   const [taskQueuedMessage, setTaskQueuedMessage] = useState<string | null>(null);
   const [activeExecTab, setActiveExecTab] = useState<'direct' | 'winrm' | 'agent' | 'dryrun'>('direct');
+  const [serverRunnerStatus, setServerRunnerStatus] = useState<{
+    active: boolean;
+    runner: any;
+  } | null>(null);
+  const [isDispatchingToRunner, setIsDispatchingToRunner] = useState(false);
+  const [runnerDispatchedMsg, setRunnerDispatchedMsg] = useState<string | null>(null);
+  const [isRunnerHelperOpen, setIsRunnerHelperOpen] = useState(false);
+  const [copiedRunnerCmd, setCopiedRunnerCmd] = useState(false);
 
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -320,6 +328,76 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
     setTimeout(() => setCopiedWinRmCmd(false), 2500);
   };
 
+  // Poll Central Server Runner status
+  useEffect(() => {
+    const checkRunner = async () => {
+      try {
+        const res = await fetch('/api/server-runner/status');
+        if (res.ok) {
+          const data = await res.json();
+          setServerRunnerStatus(data);
+        }
+      } catch (err) {
+        console.error('Error fetching server runner status:', err);
+      }
+    };
+    checkRunner();
+    const interval = setInterval(checkRunner, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleCopyRunnerCmd = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const cmd = `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}; $s = Invoke-RestMethod -Uri '${origin}/api/server-runner/script' -UseBasicParsing; Invoke-Expression $s`;
+    navigator.clipboard.writeText(cmd);
+    setCopiedRunnerCmd(true);
+    setTimeout(() => setCopiedRunnerCmd(false), 2500);
+  };
+
+  const handleDispatchToCentralRunner = async () => {
+    if (!sessionId) return;
+    setIsDispatchingToRunner(true);
+    setRunnerDispatchedMsg(null);
+    try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+      const targetPackages = selectedPackages.map((p) => p.name).join(', ') || 'Provisioning Pipeline';
+      const customScript = `$s = Invoke-RestMethod -Uri "${origin}/api/deployments/live/${sessionId}/run" -UseBasicParsing; Invoke-Expression $s`;
+
+      const res = await fetch('/api/agent/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          machineName: machineName || 'Workstation',
+          taskType: 'SoftwareInstall',
+          title: `Live WinRM Session [${sessionId.slice(0, 12)}]: ${targetPackages}`,
+          payload: {
+            packageIds: selectedPackages.map((p) => p.id),
+            customerProfileId: customer?.id || '',
+            customScript,
+          },
+          executionMode: 'service_account',
+          notes: `Dispatched from Live Runner Execution Cockpit for WinRM remote push to ${machineName}`,
+          createdBy: 'Live Execution Cockpit',
+        }),
+      });
+
+      if (res.ok) {
+        const task = await res.json();
+        setRunnerDispatchedMsg(
+          `Dispatched task [${task.id}] to Central Server Runner! The runner will connect via WinRM and execute this deployment on ${machineName} automatically.`
+        );
+        setSessionStatus('running');
+      } else {
+        const err = await res.json();
+        setRunnerDispatchedMsg(`Dispatch failed: ${err.error || 'Server error'}`);
+      }
+    } catch (err: any) {
+      setRunnerDispatchedMsg(`Error dispatching to Central Server Runner: ${err.message || err}`);
+    } finally {
+      setIsDispatchingToRunner(false);
+    }
+  };
+
   const handleDownloadScript = () => {
     if (!sessionId) return;
     const link = document.createElement('a');
@@ -463,6 +541,16 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
                 >
                   WinRM (5985): {winrmReachable ? 'Open & Ready' : 'Closed / LAN Only'}
                 </span>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold border ${
+                    serverRunnerStatus?.active
+                      ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                      : 'bg-slate-900 text-slate-400 border-slate-750'
+                  }`}
+                  title="Central Server Runner status"
+                >
+                  Central Runner: {serverRunnerStatus?.active ? 'Active (30s)' : 'Inactive'}
+                </span>
               </span>
             </div>
 
@@ -545,27 +633,143 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
             </div>
           )}
 
-          {/* Tab 2: WinRM Remote Push */}
+          {/* Tab 2: WinRM Remote Push & Central Server Runner */}
           {activeExecTab === 'winrm' && (
-            <div className="space-y-2 text-xs">
-              <div className="flex items-center justify-between text-slate-300">
-                <span>
-                  Push execution remotely from your administrative jump host or domain controller:
-                </span>
-                <button
-                  onClick={handleCopyWinRmCmd}
-                  className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center space-x-1 cursor-pointer"
-                >
-                  {copiedWinRmCmd ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedWinRmCmd ? 'Copied WinRM!' : 'Copy WinRM Command'}</span>
-                </button>
+            <div className="space-y-3 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between text-slate-300 gap-2">
+                <div>
+                  <span className="font-semibold text-white">Remote WinRM Execution:</span>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Dispatch automatically to the Central Server Runner or push manually via WinRM.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* BUTTON 1: Dispatch to Central Server Runner */}
+                  <button
+                    type="button"
+                    onClick={handleDispatchToCentralRunner}
+                    disabled={isDispatchingToRunner}
+                    className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-900/40 flex items-center space-x-1.5 cursor-pointer disabled:opacity-50 transition-all"
+                    title="Send this WinRM deployment task directly to the Central Server Runner daemon"
+                  >
+                    <Server className="w-3.5 h-3.5" />
+                    <span>{isDispatchingToRunner ? 'Dispatching...' : 'Execute via Central Server Runner'}</span>
+                  </button>
+
+                  {/* BUTTON 2: Start / View Central Server Runner Command */}
+                  <button
+                    type="button"
+                    onClick={() => setIsRunnerHelperOpen(!isRunnerHelperOpen)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-white border border-slate-700 flex items-center space-x-1.5 cursor-pointer transition-all"
+                    title="Start the Central Server Runner daemon on your management server"
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>Start Central Server Runner</span>
+                  </button>
+
+                  {/* BUTTON 3: Copy WinRM Command */}
+                  <button
+                    type="button"
+                    onClick={handleCopyWinRmCmd}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center space-x-1 cursor-pointer"
+                  >
+                    {copiedWinRmCmd ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedWinRmCmd ? 'Copied WinRM!' : 'Copy WinRM Command'}</span>
+                  </button>
+                </div>
               </div>
+
+              {/* Status / Feedback message when dispatched */}
+              {runnerDispatchedMsg && (
+                <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-700/80 text-emerald-200 text-xs flex items-center justify-between shadow-lg">
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>{runnerDispatchedMsg}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRunnerDispatchedMsg(null)}
+                    className="text-emerald-400 hover:text-white font-bold px-2 py-0.5 cursor-pointer"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
+              {/* Helper Box: Start Central Server Runner */}
+              {isRunnerHelperOpen && (
+                <div className="p-4 bg-slate-950 rounded-xl border border-cyan-800/60 shadow-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Server className="w-4 h-4 text-cyan-400" />
+                      <span className="font-bold text-white text-xs">Central Server Runner Daemon</span>
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                          serverRunnerStatus?.active
+                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                            : 'bg-amber-950 text-amber-300 border border-amber-800'
+                        }`}
+                      >
+                        {serverRunnerStatus?.active
+                          ? `🟢 Online [${serverRunnerStatus.runner?.hostname || 'Server'}] (Polling every 30s)`
+                          : '🟡 Runner Awaiting Start'}
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <a
+                        href={`${window.location.origin}/api/server-runner/script`}
+                        download="FDIM-ServerRunner.ps1"
+                        className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center space-x-1 font-semibold"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Download .ps1</span>
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => setIsRunnerHelperOpen(false)}
+                        className="text-slate-400 hover:text-white text-xs px-1 cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-300">
+                    Run this command once in Administrator PowerShell on your management server or domain controller.
+                    It checks every 30s and executes remote WinRM jobs automatically on target PCs like <strong className="text-white">{machineName || 'client'}</strong>:
+                  </p>
+
+                  <div className="relative group">
+                    <pre className="p-3 bg-slate-900 rounded-lg border border-slate-800 font-mono text-emerald-300 text-[11px] select-all break-all leading-relaxed whitespace-pre-wrap">
+                      {`[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}; $s = Invoke-RestMethod -Uri '${window.location.origin}/api/server-runner/script' -UseBasicParsing; Invoke-Expression $s`}
+                    </pre>
+                    <button
+                      type="button"
+                      onClick={handleCopyRunnerCmd}
+                      className="absolute top-2 right-2 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] flex items-center space-x-1 cursor-pointer shadow-md"
+                    >
+                      {copiedRunnerCmd ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedRunnerCmd ? 'Copied!' : 'Copy 1-Liner'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* The WinRM Remote Command snippet */}
               <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 font-mono text-cyan-300 text-[11px] select-all break-all leading-relaxed">
                 {remoteWinRmCommand || 'Generating WinRM command...'}
               </div>
-              <p className="text-[11px] text-slate-400">
-                Requires PowerShell Remoting / WinRM enabled on target (ports 5985/5986).
-              </p>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-400">
+                <span>Requires PowerShell Remoting / WinRM enabled on target (ports 5985/5986).</span>
+                {serverRunnerStatus?.active && (
+                  <span className="text-emerald-400 font-mono flex items-center space-x-1.5 font-semibold">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>Central Runner Ready ({serverRunnerStatus.runner?.hostname || 'Server'})</span>
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
