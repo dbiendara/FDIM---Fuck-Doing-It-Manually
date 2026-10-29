@@ -993,7 +993,8 @@ if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileD
 
 $profileContent = @'
 # FDIM Workstation Shell Profile
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
 function prompt { "[$env:COMPUTERNAME\\$env:USERNAME] $(Get-Date -Format 'HH:mm:ss') \`nPS> " }
 Set-Alias -Name ll -Value Get-ChildItem -ErrorAction SilentlyContinue
 '@

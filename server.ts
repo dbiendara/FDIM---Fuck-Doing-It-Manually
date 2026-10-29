@@ -2860,7 +2860,8 @@ param(
     [switch]$SingleRun = $false
 )
 
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Continue"
 
 # TLS Protocol Configuration
@@ -2956,7 +2957,8 @@ function Execute-RemoteJob {
     try {
         $remoteScriptBlock = {
             param([string]$Code)
-            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+            try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+            $OutputEncoding = [System.Text.Encoding]::UTF8
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
             try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}
             
@@ -3035,7 +3037,8 @@ function generateServerRunnerServiceInstaller(serverUrl: string, pollIntervalSec
 # ==============================================================================
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ServerUrl = "${serverUrl}"
 $InstallDir = "C:\\ProgramData\\FDIM\\ServerRunner"
@@ -3236,7 +3239,8 @@ function buildLiveDeploymentScript(session: LiveDeploymentSession, serverUrl: st
 # ==============================================================================
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Continue"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 try {
     [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
@@ -3921,7 +3925,8 @@ app.get('/api/agent/script/installer', (req, res) => {
 # ==============================================================================
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ServerUrl = "${serverUrl}"
 $AgentDir = "C:\\ProgramData\\FDIM\\Agent"
@@ -3946,7 +3951,8 @@ $WorkerContent = @'
 # FDIM Autonomous Client Worker (Runs unattended as SYSTEM)
 # ==============================================================================
 $ErrorActionPreference = "Continue"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ServerUrl = "__SERVER_URL__"
 $AgentToken = "__AGENT_TOKEN__"
@@ -4355,7 +4361,8 @@ app.post('/api/scripts/generate-quick', (req, res) => {
 # ==============================================================================
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Continue"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 $LogDirectory = "C:\\ProgramData\\FDIM\\Logs"
 if (-not (Test-Path $LogDirectory)) {
@@ -4890,7 +4897,8 @@ app.post('/api/scripts/generate', (req, res) => {
 
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 $LogDirectory = "C:\\ProgramData\\PCSetup\\Logs"
 if (!(Test-Path $LogDirectory)) {
