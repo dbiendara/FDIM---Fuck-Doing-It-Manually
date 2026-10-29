@@ -77,7 +77,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         body: JSON.stringify({
           provider: 'local',
           username: asAdmin ? 'admin' : 'technician',
-          password: 'password',
+          password: asAdmin ? 'admin' : 'technician',
           domain: 'CORP',
         }),
       });

@@ -31,6 +31,10 @@ import {
   getAllUsers,
   findUserByUsername,
   saveUser,
+  deleteUser,
+  hashPassword,
+  verifyPassword,
+  sanitizeUser,
   getAllADComputers,
   getADComputerByName,
   saveADComputer,
@@ -1887,6 +1891,7 @@ app.post('/api/setup/initialize', async (req, res) => {
     const cleanUsername = String(adminUser.username).trim();
     const existingUser = findUserByUsername(cleanUsername);
     const adminId = existingUser ? existingUser.id : `usr-admin-${Date.now().toString(36)}`;
+    const adminPass = adminUser.password ? String(adminUser.password) : (existingUser?.passwordHash ? undefined : 'admin');
     const createdAdminUser: AuthUser = {
       id: adminId,
       username: cleanUsername,
@@ -1896,9 +1901,10 @@ app.post('/api/setup/initialize', async (req, res) => {
       authProvider: 'local',
       avatarInitials: (adminUser.displayName || cleanUsername).slice(0, 2).toUpperCase(),
       showProfanity: adminUser.showProfanity !== false,
+      passwordHash: adminPass ? hashPassword(adminPass) : existingUser?.passwordHash,
     };
     const savedAdmin = saveUser(createdAdminUser);
-    activeSessionUser = savedAdmin;
+    activeSessionUser = sanitizeUser(savedAdmin);
 
     // Derive clean domain defaults from user input
     const netbiosDomain = (adConfig?.domain || '').trim().toUpperCase();
@@ -4215,70 +4221,272 @@ app.get('/api/database/download', (req, res) => {
 
 app.get('/api/auth/me', (req, res) => {
   res.json({
-    user: activeSessionUser,
+    user: sanitizeUser(activeSessionUser),
     appSettings: getAppSettings(),
   });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { username, password, provider, domain } = req.body;
   const settings = getAppSettings();
 
+  // 1. Keycloak SSO Authentication
   if (provider === 'keycloak') {
-    // Keycloak SSO login simulation / verification
-    activeSessionUser = {
-      id: `usr-kc-${Date.now()}`,
-      username: username || 'keycloak.user',
-      displayName: `${username || 'Keycloak User'} (SSO)`,
-      domain: domain || settings.defaultGlobalDomain,
-      role: 'Administrator',
-      authProvider: 'keycloak',
-      avatarInitials: 'KC',
-    };
-    return res.json({ success: true, user: activeSessionUser });
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required for Keycloak authentication' });
+    }
+    const kcConfig = settings.keycloakConfig;
+    if (!kcConfig?.serverUrl || !kcConfig?.clientId) {
+      return res.status(400).json({
+        error: 'Keycloak SSO is not configured on this server. Please log in using Local authentication or configure Keycloak in Settings.',
+      });
+    }
+
+    try {
+      const tokenUrl = `${kcConfig.serverUrl.replace(/\/+$/, '')}/realms/${encodeURIComponent(kcConfig.realm || 'enterprise')}/protocol/openid-connect/token`;
+      const params = new URLSearchParams();
+      params.append('grant_type', 'password');
+      params.append('client_id', kcConfig.clientId);
+      if (kcConfig.clientSecret) {
+        params.append('client_secret', kcConfig.clientSecret);
+      }
+      params.append('username', String(username).trim());
+      params.append('password', String(password));
+
+      const kcRes = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      });
+
+      if (!kcRes.ok) {
+        const errJson: any = await kcRes.json().catch(() => ({}));
+        return res.status(401).json({
+          error: `Keycloak authentication failed: ${errJson.error_description || errJson.error || 'Invalid credentials'}`,
+        });
+      }
+
+      const existingLocal = findUserByUsername(username);
+      const kcUser: AuthUser = {
+        id: existingLocal?.id || `usr-kc-${username.toLowerCase()}`,
+        username,
+        displayName: existingLocal?.displayName || `${username} (Keycloak SSO)`,
+        domain: domain || settings.defaultGlobalDomain,
+        role: existingLocal?.role || 'Administrator',
+        authProvider: 'keycloak',
+        avatarInitials: username.slice(0, 2).toUpperCase(),
+        showProfanity: existingLocal?.showProfanity !== false,
+      };
+
+      saveUser(kcUser);
+      activeSessionUser = sanitizeUser(kcUser);
+      return res.json({ success: true, user: activeSessionUser });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: `Failed to connect to Keycloak server: ${err?.message || 'Server unreachable'}`,
+      });
+    }
   }
 
+  // 2. Active Directory / LDAP Bind Authentication
   if (provider === 'active_directory') {
     if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password required for Active Directory authentication' });
+      return res.status(400).json({ error: 'Username and password are required for Active Directory authentication' });
     }
+
+    const adConfig = settings.adLdapConfig;
+    if (!adConfig?.ldapUrl) {
+      return res.status(400).json({
+        error: 'Active Directory is not configured on this server. Please log in using Local authentication or configure LDAP in Settings / Setup Wizard.',
+      });
+    }
+
     const cleanUser = username.includes('\\') ? username.split('\\')[1] : username.split('@')[0];
-    const userDomain = domain || settings.adLdapConfig.domain || 'CORP';
+    const userDomain = domain || adConfig.domain || settings.defaultGlobalDomain || 'CORP';
 
-    activeSessionUser = {
-      id: `usr-ad-${cleanUser.toLowerCase()}`,
-      username: `${userDomain}\\${cleanUser}`,
-      displayName: `${cleanUser} (Domain Admin)`,
-      domain: userDomain,
-      role: 'Administrator',
-      authProvider: 'active_directory',
-      avatarInitials: cleanUser.slice(0, 2).toUpperCase(),
-    };
-    return res.json({ success: true, user: activeSessionUser });
+    const normalizedUrl = normalizeLdapUrl(adConfig.ldapUrl);
+    if (!normalizedUrl) {
+      return res.status(500).json({ error: 'Invalid LDAP URL configured in settings.' });
+    }
+
+    const client = new LdapClient({
+      url: normalizedUrl,
+      timeout: 7000,
+      connectTimeout: 5000,
+      tlsOptions: { rejectUnauthorized: false },
+    });
+
+    try {
+      const bindResult = await executeAdBind(
+        client,
+        username,
+        password,
+        userDomain,
+        adConfig.baseDn,
+        normalizedUrl
+      );
+
+      await client.unbind().catch(() => {});
+
+      if (!bindResult.bound) {
+        return res.status(401).json({
+          error: bindResult.error || `Active Directory authentication failed for "${username}".`,
+        });
+      }
+
+      // Determine role from username or admin group
+      const isAdmin =
+        cleanUser.toLowerCase() === 'administrator' ||
+        (adConfig.adminGroup && username.toLowerCase().includes(adConfig.adminGroup.toLowerCase()));
+
+      const existingLocal = findUserByUsername(cleanUser) || findUserByUsername(`${userDomain}\\${cleanUser}`);
+      const adUser: AuthUser = {
+        id: existingLocal?.id || `usr-ad-${cleanUser.toLowerCase()}`,
+        username: `${userDomain}\\${cleanUser}`,
+        displayName: existingLocal?.displayName || `${cleanUser} (Domain ${isAdmin ? 'Admin' : 'User'})`,
+        domain: userDomain,
+        role: existingLocal?.role || (isAdmin ? 'Administrator' : 'Technician'),
+        authProvider: 'active_directory',
+        avatarInitials: cleanUser.slice(0, 2).toUpperCase(),
+        showProfanity: existingLocal?.showProfanity !== false,
+      };
+
+      saveUser(adUser);
+      activeSessionUser = sanitizeUser(adUser);
+      return res.json({ success: true, user: activeSessionUser });
+    } catch (err: any) {
+      await client.unbind().catch(() => {});
+      return res.status(500).json({
+        error: `Active Directory connection failed: ${err?.message || 'Domain Controller unreachable'}`,
+      });
+    }
   }
 
-  // Local authentication
-  const existing = findUserByUsername(username);
-  if (existing) {
-    activeSessionUser = existing;
-    return res.json({ success: true, user: existing });
+  // 3. Local Authentication with Strict Verification
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
   }
 
-  activeSessionUser = {
-    id: `usr-${username.toLowerCase()}`,
-    username,
-    displayName: `${username} (Technician)`,
-    domain: domain || settings.defaultGlobalDomain,
-    role: 'Technician',
-    authProvider: 'local',
-    avatarInitials: username.slice(0, 2).toUpperCase(),
-  };
+  const cleanUsername = String(username).trim();
+  const existing = findUserByUsername(cleanUsername);
+
+  // If user does not exist in SQLite database, REJECT immediately!
+  if (!existing) {
+    return res.status(401).json({
+      error: `Authentication failed: User "${cleanUsername}" does not exist.`,
+    });
+  }
+
+  // Verify password using cryptographic scrypt hash
+  const isValid = verifyPassword(String(password), existing.passwordHash, existing.username);
+  if (!isValid) {
+    return res.status(401).json({
+      error: 'Authentication failed: Incorrect password.',
+    });
+  }
+
+  // If user record did not have a hashed password yet (e.g. legacy entry), upgrade to salted cryptographic hash
+  if (!existing.passwordHash || !existing.passwordHash.includes(':')) {
+    existing.passwordHash = hashPassword(password);
+    saveUser(existing);
+  }
+
+  activeSessionUser = sanitizeUser(existing);
   res.json({ success: true, user: activeSessionUser });
 });
 
 app.post('/api/auth/logout', (req, res) => {
   activeSessionUser = null;
   res.json({ success: true, user: null });
+});
+
+// -------------------------------------------------------------
+// USER MANAGEMENT API (Admin Operations)
+// -------------------------------------------------------------
+
+app.get('/api/users', (req, res) => {
+  const users = getAllUsers().map(sanitizeUser);
+  res.json(users);
+});
+
+app.post('/api/users', (req, res) => {
+  const { username, displayName, role, password, domain } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
+  const cleanUsername = String(username).trim();
+  if (cleanUsername.length < 3) {
+    return res.status(400).json({ error: 'Username must be at least 3 characters long' });
+  }
+
+  if (String(password).length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+  }
+
+  const existing = findUserByUsername(cleanUsername);
+  if (existing) {
+    return res.status(400).json({ error: `User "${cleanUsername}" already exists` });
+  }
+
+  const settings = getAppSettings();
+  const newUser: AuthUser = {
+    id: `usr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    username: cleanUsername,
+    displayName: displayName || cleanUsername,
+    domain: domain || settings.defaultGlobalDomain || 'LOCAL',
+    role: role === 'Administrator' ? 'Administrator' : 'Technician',
+    authProvider: 'local',
+    avatarInitials: cleanUsername.slice(0, 2).toUpperCase(),
+    showProfanity: true,
+    passwordHash: hashPassword(String(password)),
+  };
+
+  const saved = saveUser(newUser);
+  res.status(201).json(sanitizeUser(saved));
+});
+
+app.put('/api/users/:id/password', (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!newPassword || String(newPassword).length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters long' });
+  }
+
+  const all = getAllUsers();
+  const target = all.find((u) => u.id === req.params.id);
+  if (!target) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  // If caller is updating their own password (or non-admin), verify current password
+  const isAdmin = activeSessionUser?.role === 'Administrator';
+  if (!isAdmin || currentPassword) {
+    const isValid = verifyPassword(String(currentPassword || ''), target.passwordHash, target.username);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+  }
+
+  target.passwordHash = hashPassword(String(newPassword));
+  const updated = saveUser(target);
+  res.json({ success: true, message: `Password updated successfully for ${target.username}`, user: sanitizeUser(updated) });
+});
+
+app.delete('/api/users/:id', (req, res) => {
+  const all = getAllUsers();
+  const target = all.find((u) => u.id === req.params.id);
+  if (!target) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  // Prevent deleting the last administrator
+  const admins = all.filter((u) => u.role === 'Administrator');
+  if (target.role === 'Administrator' && admins.length <= 1) {
+    return res.status(400).json({ error: 'Cannot delete the sole Administrator account' });
+  }
+
+  deleteUser(target.id);
+  res.json({ success: true, message: `User ${target.username} deleted` });
 });
 
 app.post('/api/auth/test-ad', async (req, res) => {

@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'node:crypto';
 import {
   CustomerProfile,
   SoftwarePackage,
@@ -114,6 +115,76 @@ try {
   }
 } catch (err) {
   console.warn('Deployments schema migration check:', err);
+}
+
+// -------------------------------------------------------------
+// USER AUTHENTICATION & PASSWORD UTILITIES
+// -------------------------------------------------------------
+
+export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+export function verifyPassword(password: string, storedHash?: string, username?: string): boolean {
+  if (!password) return false;
+
+  if (!storedHash) {
+    // If no passwordHash is set yet, check standard initial defaults
+    const lowerUser = (username || '').toLowerCase();
+    if (lowerUser === 'admin' && (password === 'admin' || password === 'password')) {
+      return true;
+    }
+    if (lowerUser === 'technician' && (password === 'technician' || password === 'password')) {
+      return true;
+    }
+    return false;
+  }
+
+  // Cryptographic salt:hash format
+  if (storedHash.includes(':')) {
+    try {
+      const [salt, key] = storedHash.split(':');
+      const keyBuffer = Buffer.from(key, 'hex');
+      const derivedKey = crypto.scryptSync(password, salt, 64);
+      return crypto.timingSafeEqual(keyBuffer, derivedKey);
+    } catch {
+      return false;
+    }
+  }
+
+  // Plaintext fallback (legacy)
+  return password === storedHash;
+}
+
+export function sanitizeUser(user: AuthUser | null | undefined): AuthUser | null {
+  if (!user) return null;
+  const copy = { ...user };
+  delete copy.passwordHash;
+  return copy;
+}
+
+// Auto-migrate schema: ensure users have secure passwordHash
+try {
+  const existingUsers = db.prepare('SELECT id, username, data FROM users').all() as Array<{ id: string; username: string; data: string }>;
+  const updateUserStmt = db.prepare('UPDATE users SET data = ? WHERE id = ?');
+  for (const u of existingUsers) {
+    try {
+      const parsed: AuthUser = JSON.parse(u.data);
+      if (!parsed.passwordHash) {
+        if (parsed.username.toLowerCase() === 'admin') {
+          parsed.passwordHash = hashPassword('admin');
+          updateUserStmt.run(JSON.stringify(parsed), u.id);
+        } else if (parsed.username.toLowerCase() === 'technician') {
+          parsed.passwordHash = hashPassword('technician');
+          updateUserStmt.run(JSON.stringify(parsed), u.id);
+        }
+      }
+    } catch {}
+  }
+} catch (err) {
+  console.warn('Users password migration check:', err);
 }
 
 // -------------------------------------------------------------
@@ -256,6 +327,7 @@ export function seedInitialDataIfEmpty(
       authProvider: 'local',
       avatarInitials: 'DA',
       showProfanity: true,
+      passwordHash: hashPassword('admin'),
     };
     const defaultTech: AuthUser = {
       id: 'usr-tech1',
@@ -266,6 +338,7 @@ export function seedInitialDataIfEmpty(
       authProvider: 'local',
       avatarInitials: 'FE',
       showProfanity: true,
+      passwordHash: hashPassword('technician'),
     };
     insertUser.run(defaultAdmin.id, defaultAdmin.username, JSON.stringify(defaultAdmin));
     insertUser.run(defaultTech.id, defaultTech.username, JSON.stringify(defaultTech));
@@ -679,12 +752,24 @@ export function findUserByUsername(username: string): AuthUser | null {
   return row ? JSON.parse(row.data) : null;
 }
 
-export function saveUser(user: AuthUser): AuthUser {
+export function saveUser(user: AuthUser, plainPassword?: string): AuthUser {
+  if (plainPassword) {
+    user.passwordHash = hashPassword(plainPassword);
+  }
   const existing = db
-    .prepare('SELECT id FROM users WHERE id = ? OR LOWER(username) = LOWER(?)')
-    .get(user.id, user.username) as { id: string } | undefined;
+    .prepare('SELECT id, data FROM users WHERE id = ? OR LOWER(username) = LOWER(?)')
+    .get(user.id, user.username) as { id: string; data: string } | undefined;
   if (existing) {
-    const updatedUser = { ...user, id: existing.id };
+    let parsedExisting: AuthUser | null = null;
+    try {
+      parsedExisting = JSON.parse(existing.data);
+    } catch {}
+    const updatedUser: AuthUser = {
+      ...parsedExisting,
+      ...user,
+      id: existing.id,
+      passwordHash: user.passwordHash || parsedExisting?.passwordHash,
+    };
     db.prepare('UPDATE users SET username = ?, data = ? WHERE id = ?').run(
       updatedUser.username,
       JSON.stringify(updatedUser),
@@ -692,6 +777,9 @@ export function saveUser(user: AuthUser): AuthUser {
     );
     return updatedUser;
   } else {
+    if (!user.passwordHash && plainPassword) {
+      user.passwordHash = hashPassword(plainPassword);
+    }
     db.prepare('INSERT INTO users (id, username, data) VALUES (?, ?, ?)').run(
       user.id,
       user.username,
@@ -699,6 +787,11 @@ export function saveUser(user: AuthUser): AuthUser {
     );
     return user;
   }
+}
+
+export function deleteUser(id: string): boolean {
+  const result = db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  return result.changes > 0;
 }
 
 // Database stats & file info

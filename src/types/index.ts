@@ -354,6 +354,7 @@ export interface AuthUser {
   authProvider: 'local' | 'active_directory' | 'keycloak';
   avatarInitials?: string;
   showProfanity?: boolean; // User preference: true = "Fuck Doing It Manually", false = "Forget Doing It Manually"
+  passwordHash?: string; // Hashed password (managed server-side)
 }
 
 export interface AIDetectionResult {

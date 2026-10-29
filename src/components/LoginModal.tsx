@@ -43,10 +43,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     avatarInitials: 'DA',
     showProfanity: true,
   };
-  const [authMode, setAuthMode] = useState<'ad' | 'keycloak' | 'local'>('ad');
+  const [authMode, setAuthMode] = useState<'ad' | 'keycloak' | 'local'>(() =>
+    appSettings.authMode === 'active_directory' ? 'ad' : appSettings.authMode === 'keycloak' ? 'keycloak' : 'local'
+  );
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [domain, setDomain] = useState(appSettings.adLdapConfig.domain || 'CORP');
+  const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -247,21 +250,30 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">Domain Password:</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
-                required
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  required
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 pr-9 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
             </div>
 
             <div className="pt-2">
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold transition-all shadow-md shadow-cyan-600/30 flex items-center justify-center space-x-2"
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold transition-all shadow-md shadow-cyan-600/30 flex items-center justify-center space-x-2 cursor-pointer"
               >
                 {isSubmitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
                 <span>Authenticate with Active Directory</span>
@@ -272,23 +284,62 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
         {/* Keycloak Form */}
         {authMode === 'keycloak' && (
-          <div className="space-y-4 text-center py-2">
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Authenticate via enterprise single sign-on backed by Keycloak OIDC realm:
-              <br />
-              <strong className="text-purple-300 font-mono">{appSettings.keycloakConfig.realm}</strong> (
-              <span className="font-mono text-slate-400">{appSettings.keycloakConfig.serverUrl}</span>)
-            </p>
+          <form onSubmit={handleLogin} className="space-y-3.5">
+            <div className="p-2.5 rounded-xl bg-purple-950/40 border border-purple-800/60 text-xs text-purple-200">
+              <p className="font-semibold flex items-center space-x-1.5">
+                <Lock className="w-3.5 h-3.5 text-purple-400" />
+                <span>Enterprise Keycloak OIDC Realm</span>
+              </p>
+              <p className="text-[11px] text-purple-300/80 mt-1">
+                Realm: <strong className="font-mono">{appSettings.keycloakConfig.realm || 'enterprise'}</strong>
+                {appSettings.keycloakConfig.serverUrl ? ` • ${appSettings.keycloakConfig.serverUrl}` : ' (Not configured)'}
+              </p>
+            </div>
 
-            <button
-              onClick={handleLogin}
-              disabled={isSubmitting}
-              className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all shadow-md shadow-purple-600/30 flex items-center justify-center space-x-2"
-            >
-              <Lock className="w-4 h-4" />
-              <span>Log in with Keycloak SSO</span>
-            </button>
-          </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">Keycloak Username / Email:</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="sso.admin"
+                required
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-purple-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">Keycloak Password:</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  required
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 pr-9 text-xs text-white font-mono focus:outline-none focus:border-purple-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all shadow-md shadow-purple-600/30 flex items-center justify-center space-x-2 cursor-pointer"
+              >
+                {isSubmitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                <span>Log in with Keycloak SSO</span>
+              </button>
+            </div>
+          </form>
         )}
 
         {/* Local Form */}
@@ -306,20 +357,52 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               />
             </div>
 
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-slate-300">Local Password:</label>
+                <span className="text-[10px] text-slate-500 font-mono">Default: admin / technician</span>
+              </div>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  required
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 pr-9 text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+
             <div className="flex gap-2 text-xs">
               <button
                 type="button"
-                onClick={() => setUsername('admin')}
-                className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono"
+                onClick={() => {
+                  setUsername('admin');
+                  setPassword('admin');
+                  setErrorMsg('');
+                }}
+                className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[11px] cursor-pointer"
               >
-                Admin
+                Autofill Admin
               </button>
               <button
                 type="button"
-                onClick={() => setUsername('technician')}
-                className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono"
+                onClick={() => {
+                  setUsername('technician');
+                  setPassword('technician');
+                  setErrorMsg('');
+                }}
+                className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[11px] cursor-pointer"
               >
-                Field Tech
+                Autofill Field Tech
               </button>
             </div>
 
@@ -327,10 +410,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold transition-all flex items-center justify-center space-x-2"
+                className="w-full py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-sm"
               >
-                <User className="w-4 h-4" />
-                <span>Switch Local Profile</span>
+                {isSubmitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <User className="w-4 h-4" />}
+                <span>Sign In with Local Credentials</span>
               </button>
             </div>
           </form>
