@@ -2500,57 +2500,80 @@ foreach ($Target in $Targets) {
                         No provisioning or agent events recorded for this workstation yet.
                       </div>
                     ) : (
-                      historyData.timeline.map((ev: any) => (
-                        <div
-                          key={ev.id}
-                          className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex items-start justify-between gap-4"
-                        >
-                          <div className="flex items-start space-x-3">
-                            <div
-                              className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${
-                                ev.status === 'Completed'
-                                  ? 'bg-emerald-400'
-                                  : ev.status === 'Failed'
-                                  ? 'bg-rose-400'
-                                  : 'bg-amber-400'
-                              }`}
-                            />
-                            <div>
-                              <div className="flex items-center space-x-2">
-                                <span className="text-xs font-bold text-white">{ev.title}</span>
-                                <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
-                                  {ev.status}
-                                </span>
-                              </div>
-                              <p className="text-xs text-slate-400 mt-1">{ev.subtitle}</p>
-                              {Array.isArray(ev.packages) && ev.packages.length > 0 && (
-                                <div className="flex flex-wrap gap-1.5 mt-2">
-                                  {ev.packages.map((pkgName: string, i: number) => (
-                                    <span
-                                      key={i}
-                                      className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-cyan-300"
-                                    >
-                                      {pkgName}
-                                    </span>
-                                  ))}
+                      historyData.timeline.map((ev: any) => {
+                        const dateObj = ev.timestamp ? new Date(ev.timestamp) : null;
+                        const dateValid = dateObj && !isNaN(dateObj.getTime());
+                        return (
+                          <div
+                            key={ev.id}
+                            className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex items-start justify-between gap-4"
+                          >
+                            <div className="flex items-start space-x-3">
+                              <div
+                                className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${
+                                  ev.status === 'Completed' || ev.status === 'Success'
+                                    ? 'bg-emerald-400'
+                                    : ev.status === 'Failed'
+                                    ? 'bg-rose-400'
+                                    : 'bg-amber-400'
+                                }`}
+                              />
+                              <div>
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-xs font-bold text-white">
+                                    {ev.title || 'Workstation Event'}
+                                  </span>
+                                  <span
+                                    className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold ${
+                                      ev.status === 'Completed' || ev.status === 'Success'
+                                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                                        : ev.status === 'Failed'
+                                        ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                                        : 'bg-slate-850 text-slate-300 border border-slate-700'
+                                    }`}
+                                  >
+                                    {ev.status}
+                                  </span>
                                 </div>
+                                {ev.subtitle && (
+                                  <p className="text-xs text-slate-400 mt-1">{ev.subtitle}</p>
+                                )}
+                                {Array.isArray(ev.packages) && ev.packages.length > 0 && (
+                                  <div className="flex flex-wrap gap-1.5 mt-2">
+                                    {ev.packages.map((pkgName: string, i: number) => (
+                                      <span
+                                        key={i}
+                                        className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-cyan-300 font-medium"
+                                      >
+                                        {pkgName}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {ev.details && (
+                                  <p className="text-[11px] text-slate-500 mt-1.5 font-mono italic">
+                                    {ev.details}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="text-right text-[11px] text-slate-400 shrink-0 font-mono">
+                              <div>{dateValid ? dateObj.toLocaleDateString() : '—'}</div>
+                              <div className="text-slate-500">
+                                {dateValid
+                                  ? dateObj.toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })
+                                  : ''}
+                              </div>
+                              {ev.actor && (
+                                <div className="text-[10px] text-slate-400 mt-0.5">by {ev.actor}</div>
                               )}
                             </div>
                           </div>
-                          <div className="text-right text-[11px] text-slate-500 shrink-0 font-mono">
-                            <div>{new Date(ev.timestamp).toLocaleDateString()}</div>
-                            <div>
-                              {new Date(ev.timestamp).toLocaleTimeString([], {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </div>
-                            {ev.actor && (
-                              <div className="text-[10px] text-slate-400 mt-0.5">by {ev.actor}</div>
-                            )}
-                          </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}
@@ -2562,31 +2585,53 @@ foreach ($Target in $Targets) {
                         No full provisioning runs recorded for {historyComputerName}.
                       </div>
                     ) : (
-                      historyData.deployments.map((dep: any) => (
-                        <div
-                          key={dep.id}
-                          className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2"
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-2">
-                              <span className="text-xs font-bold text-white">
-                                {dep.customerName} — Full Provisioning
-                              </span>
-                              <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                                {dep.status}
+                      historyData.deployments.map((dep: any) => {
+                        const dateObj = dep.timestamp || dep.startedAt ? new Date(dep.timestamp || dep.startedAt) : null;
+                        const dateValid = dateObj && !isNaN(dateObj.getTime());
+                        const durationSec = typeof dep.durationSeconds === 'number' && dep.durationSeconds > 0 ? dep.durationSeconds : null;
+                        return (
+                          <div
+                            key={dep.id}
+                            className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2.5 shadow-sm"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center space-x-2">
+                                <span className="text-xs font-bold text-white">
+                                  {dep.customerName || dep.customerCompanyName || 'Corporate'} — {dep.typeLabel || 'Full Provisioning'}
+                                </span>
+                                <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold font-mono">
+                                  {dep.status || 'Completed'}
+                                </span>
+                              </div>
+                              <span className="text-xs font-mono text-slate-400">
+                                {dateValid ? dateObj.toLocaleString() : 'Recorded'}
+                                {durationSec !== null ? ` (${durationSec}s)` : ''}
                               </span>
                             </div>
-                            <span className="text-xs font-mono text-slate-400">
-                              {new Date(dep.timestamp).toLocaleString()} ({dep.durationSeconds}s)
-                            </span>
+                            <div className="text-xs text-slate-400 flex items-center space-x-3">
+                              <span>
+                                Domain: <span className="font-mono text-slate-300">{dep.domainName || 'corp.local'}</span>
+                              </span>
+                              <span>•</span>
+                              <span>
+                                Technician: <span className="text-slate-300">{dep.technicianName || 'System Admin'}</span>
+                              </span>
+                            </div>
+                            {Array.isArray(dep.packageNames) && dep.packageNames.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 pt-1">
+                                {dep.packageNames.map((pName: string, i: number) => (
+                                  <span
+                                    key={i}
+                                    className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-cyan-300 font-medium"
+                                  >
+                                    {pName}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                          <div className="text-xs text-slate-400">
-                            Domain: <span className="font-mono text-slate-300">{dep.domainName}</span>{' '}
-                            • Technician:{' '}
-                            <span className="text-slate-300">{dep.technicianName || 'System'}</span>
-                          </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}
@@ -2598,32 +2643,67 @@ foreach ($Target in $Targets) {
                         No queued or agent tasks recorded for {historyComputerName}.
                       </div>
                     ) : (
-                      historyData.tasks.map((task: any) => (
-                        <div
-                          key={task.id}
-                          className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2"
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-2">
-                              <span className="text-xs font-bold text-white">{task.taskType}</span>
-                              <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono">
-                                {task.status}
+                      historyData.tasks.map((task: any) => {
+                        const dateObj = task.createdAt || task.dispatchedAt ? new Date(task.createdAt || task.dispatchedAt) : null;
+                        const dateValid = dateObj && !isNaN(dateObj.getTime());
+                        const hasPackages = Array.isArray(task.packageNames) && task.packageNames.length > 0;
+                        const displayLog = task.outputLog || task.resultLog;
+                        return (
+                          <div
+                            key={task.id}
+                            className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2.5 shadow-sm"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center space-x-2">
+                                <span className="text-xs font-bold text-white">
+                                  {task.title || task.taskType || 'Task'}
+                                </span>
+                                <span
+                                  className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold ${
+                                    task.status === 'completed' || task.status === 'Completed'
+                                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                                      : task.status === 'failed' || task.status === 'Failed'
+                                      ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                                      : 'bg-slate-800 text-cyan-300 border border-slate-700'
+                                  }`}
+                                >
+                                  {task.status}
+                                </span>
+                              </div>
+                              <span className="text-xs font-mono text-slate-400">
+                                {dateValid ? `Created: ${dateObj.toLocaleString()}` : ''}
                               </span>
                             </div>
-                            <span className="text-xs font-mono text-slate-400">
-                              Created: {new Date(task.createdAt).toLocaleString()}
-                            </span>
+                            <div className="text-xs text-slate-300 flex items-center space-x-2">
+                              <span className="text-slate-400">Packages:</span>
+                              {hasPackages ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {task.packageNames.map((pkgName: string, i: number) => (
+                                    <span
+                                      key={i}
+                                      className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-cyan-300 font-medium"
+                                    >
+                                      {pkgName}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-slate-500 italic">Custom Script / System Command</span>
+                              )}
+                            </div>
+                            {(task.executor || task.serviceAccount) && (
+                              <div className="text-[11px] text-slate-400">
+                                Executor: <span className="text-slate-300 font-mono">{task.executor || task.serviceAccount}</span>
+                              </div>
+                            )}
+                            {displayLog && (
+                              <pre className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-36">
+                                {displayLog}
+                              </pre>
+                            )}
                           </div>
-                          <div className="text-xs text-slate-300">
-                            Packages: {(task.packageNames || []).join(', ')}
-                          </div>
-                          {task.outputLog && (
-                            <pre className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-emerald-300 overflow-x-auto">
-                              {task.outputLog}
-                            </pre>
-                          )}
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}

@@ -774,67 +774,104 @@ export function getComputerHistory(machineName: string) {
   const allPkgs = getAllPackages();
   const pkgMap = new Map(allPkgs.map((p) => [p.id, p]));
 
-  // Build timeline of package installations
-  const installationTimeline: Array<{
+  // Customer map
+  const allCustomers = getAllCustomers();
+  const customerMap = new Map(allCustomers.map((c) => [c.id, c]));
+
+  // Enrich tasks with packageNames, outputLog, and timestamps
+  const enrichedTasks = tasks.map((t) => {
+    const rawPayload: any = t.payload || {};
+    const pkgIds: string[] = rawPayload.packageIds || (t as any).packageIds || [];
+    let pkgNames = Array.isArray(pkgIds) ? pkgIds.map((id) => pkgMap.get(id)?.name || id) : [];
+    if (pkgNames.length === 0 && Array.isArray((t as any).packageNames)) {
+      pkgNames = (t as any).packageNames;
+    }
+    if (pkgNames.length === 0 && Array.isArray(rawPayload.packageNames)) {
+      pkgNames = rawPayload.packageNames;
+    }
+    if (pkgNames.length === 0 && Array.isArray((t as any).packages)) {
+      pkgNames = (t as any).packages;
+    }
+
+    const fallbackTitle = t.title || `${t.taskType} on ${t.machineName}`;
+    const outputLog = t.resultLog || (t as any).outputLog || (t as any).log || '';
+    const startedAt = t.dispatchedAt || t.createdAt || new Date().toISOString();
+    const timestamp = t.completedAt || t.dispatchedAt || t.createdAt || new Date().toISOString();
+
+    return {
+      ...t,
+      title: fallbackTitle,
+      packageNames: pkgNames,
+      outputLog,
+      startedAt,
+      timestamp,
+    };
+  });
+
+  // Enrich deployments with customerName, durationSeconds, packageNames, typeLabel
+  const compCustomer = computer ? customerMap.get(computer.customerProfileId) : undefined;
+  const enrichedDeployments = deployments.map((d) => {
+    const cust = customerMap.get(d.customerProfileId) || compCustomer;
+    const startMs = d.startedAt ? new Date(d.startedAt).getTime() : NaN;
+    const endMs = d.completedAt ? new Date(d.completedAt).getTime() : startMs;
+    const durationSeconds = !isNaN(startMs) && !isNaN(endMs) && endMs >= startMs ? Math.round((endMs - startMs) / 1000) : 0;
+    const pkgNames = (d.selectedPackageIds || []).map((id) => pkgMap.get(id)?.name || id);
+    const customerName = d.customerCompanyName || cust?.companyName || 'Corporate Client';
+    const domainName = d.domainName || cust?.domainName || computer?.domain || 'corp.local';
+    const timestamp = d.completedAt || d.startedAt || new Date().toISOString();
+
+    return {
+      ...d,
+      customerName,
+      domainName,
+      timestamp,
+      durationSeconds,
+      packageNames: pkgNames,
+      typeLabel: d.deploymentType === 'QuickSoftwareInstall' ? 'Quick Software Deploy' : 'Full Zero-Touch Provisioning',
+    };
+  });
+
+  // Build unified timeline
+  const unifiedTimeline: Array<{
     id: string;
-    machineName: string;
-    packageName: string;
-    packageVersion: string;
-    category?: string;
-    installedAt: string;
-    method: 'FDIM Staging' | 'Quick Deploy' | 'Agent Task' | 'Winget' | 'ODT Click-to-Run';
-    status: 'Success' | 'Failed';
-    exitCode?: number;
-    technician: string;
-    deploymentRecordId?: string;
+    type: 'deployment' | 'task' | 'inventory';
+    title: string;
+    subtitle: string;
+    status: 'Completed' | 'Success' | 'Failed' | 'In Progress' | 'Queued';
+    timestamp: string;
+    actor: string;
+    packages: string[];
+    details?: string;
   }> = [];
 
   // 1. From deployments
-  for (const dep of deployments) {
-    const isQuick = dep.deploymentType === 'QuickSoftwareInstall';
-    const method = isQuick ? 'Quick Deploy' : 'FDIM Staging';
-    for (const pkgId of dep.selectedPackageIds || []) {
-      const pkg = pkgMap.get(pkgId);
-      const pkgMethod = pkg?.installerType === 'Winget' ? 'Winget' : (pkgId === 'pkg-outlook-classic' ? 'ODT Click-to-Run' : method);
-      installationTimeline.push({
-        id: `inst-${dep.id}-${pkgId}`,
-        machineName: dep.machineName,
-        packageName: pkg?.name || pkgId,
-        packageVersion: pkg?.version || '1.0',
-        category: pkg?.category || 'General',
-        installedAt: dep.completedAt || dep.startedAt,
-        method: pkgMethod,
-        status: dep.status === 'Completed' ? 'Success' : (dep.status === 'Failed' ? 'Failed' : 'Success'),
-        exitCode: 0,
-        technician: dep.technicianName || 'Domain Admin',
-        deploymentRecordId: dep.id,
-      });
-    }
+  for (const dep of enrichedDeployments) {
+    unifiedTimeline.push({
+      id: `ev-dep-${dep.id}`,
+      type: 'deployment',
+      title: `${dep.customerName} — ${dep.typeLabel}`,
+      subtitle: `Domain: ${dep.domainName || 'corp.local'} • ${dep.packageNames.length} package(s) staged`,
+      status: dep.status === 'Completed' ? 'Completed' : (dep.status === 'Failed' ? 'Failed' : 'In Progress'),
+      timestamp: dep.timestamp,
+      actor: dep.technicianName || 'Admin (FDIM Live Runner)',
+      packages: dep.packageNames,
+      details: dep.durationSeconds > 0 ? `Completed in ${dep.durationSeconds}s` : undefined,
+    });
   }
 
   // 2. From agent tasks
-  for (const task of tasks) {
-    if (task.status === 'completed' && task.payload?.packageIds) {
-      for (const pkgId of task.payload.packageIds) {
-        const pkg = pkgMap.get(pkgId);
-        // Avoid duplicate if already in timeline around same timestamp
-        const exists = installationTimeline.some((item) => item.packageName === (pkg?.name || pkgId) && Math.abs(new Date(item.installedAt).getTime() - new Date(task.completedAt || task.createdAt).getTime()) < 60000);
-        if (!exists) {
-          installationTimeline.push({
-            id: `inst-task-${task.id}-${pkgId}`,
-            machineName: task.machineName,
-            packageName: pkg?.name || pkgId,
-            packageVersion: pkg?.version || '1.0',
-            category: pkg?.category || 'General',
-            installedAt: task.completedAt || task.createdAt,
-            method: 'Agent Task',
-            status: 'Success',
-            exitCode: task.exitCode ?? 0,
-            technician: task.createdBy || 'Agent SYSTEM',
-          });
-        }
-      }
-    }
+  for (const t of enrichedTasks) {
+    unifiedTimeline.push({
+      id: `ev-task-${t.id}`,
+      type: 'task',
+      title: t.title || `${t.taskType} on ${t.machineName}`,
+      subtitle: t.executor || (t.serviceAccount ? `Runner: ${t.serviceAccount}` : `Mode: ${t.executionMode}`),
+      status: t.status === 'completed' || t.status === 'Completed' ? 'Completed' : (t.status === 'failed' || t.status === 'Failed' ? 'Failed' : 'Queued'),
+      timestamp: t.completedAt || t.dispatchedAt || t.createdAt,
+      actor: t.createdBy || t.executor || 'System',
+      packages: t.packageNames,
+      details: t.resultLog ? t.resultLog.slice(0, 150) : undefined,
+    });
   }
 
   // 3. Fallback: If computer has installedPackageIds not yet in timeline
@@ -842,31 +879,45 @@ export function getComputerHistory(machineName: string) {
     for (const pkgId of computer.installedPackageIds) {
       const pkg = pkgMap.get(pkgId);
       const name = pkg?.name || pkgId;
-      if (!installationTimeline.some((item) => item.packageName === name)) {
-        installationTimeline.push({
+      if (!unifiedTimeline.some((item) => item.packages.includes(name))) {
+        unifiedTimeline.push({
           id: `inst-ad-${computer.id}-${pkgId}`,
-          machineName: computer.name,
-          packageName: name,
-          packageVersion: pkg?.version || 'Detected',
-          category: pkg?.category || 'Inventory',
-          installedAt: computer.lastSeen || new Date().toISOString(),
-          method: pkg?.sourceType === 'winget' ? 'Winget' : (pkgId === 'pkg-outlook-classic' ? 'ODT Click-to-Run' : 'FDIM Staging'),
-          status: 'Success',
-          exitCode: 0,
-          technician: 'Baseline Inventory',
+          type: 'inventory',
+          title: `Detected Software: ${name}`,
+          subtitle: `Category: ${pkg?.category || 'Inventory'} • Version: ${pkg?.version || 'Installed'}`,
+          status: 'Completed',
+          timestamp: computer.lastSeen || computer.lastHeartbeat || new Date().toISOString(),
+          actor: 'Active Directory Inventory Sync',
+          packages: [name],
         });
       }
     }
   }
 
   // Sort newest first
-  installationTimeline.sort((a, b) => new Date(b.installedAt).getTime() - new Date(a.installedAt).getTime());
+  unifiedTimeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  // Summary counts
+  const totalDeployments = deployments.length;
+  const completedDeployments = deployments.filter((d) => d.status === 'Completed').length;
+  const failedDeployments = deployments.filter((d) => d.status === 'Failed').length;
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter((t) => t.status === 'completed' || t.status === 'Completed').length;
+  const failedTasks = tasks.filter((t) => t.status === 'failed' || t.status === 'Failed').length;
 
   return {
     computer,
-    timeline: installationTimeline,
-    deployments,
-    tasks,
+    summary: {
+      totalDeployments,
+      completedDeployments,
+      failedDeployments: failedDeployments + failedTasks,
+      totalTasks,
+      completedTasks,
+      failedTasks,
+    },
+    timeline: unifiedTimeline,
+    deployments: enrichedDeployments,
+    tasks: enrichedTasks,
   };
 }
 
