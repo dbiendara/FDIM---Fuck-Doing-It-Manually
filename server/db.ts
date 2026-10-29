@@ -51,6 +51,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS deployments (
     id TEXT PRIMARY KEY,
+    machine_name TEXT,
     data TEXT NOT NULL,
     started_at TEXT NOT NULL
   );
@@ -94,6 +95,26 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 `);
+
+// Auto-migrate schema: ensure machine_name column exists on deployments table and backfill
+try {
+  const colInfo = db.prepare("PRAGMA table_info(deployments)").all() as Array<{ name: string }>;
+  if (!colInfo.some((c) => c.name === 'machine_name')) {
+    db.exec("ALTER TABLE deployments ADD COLUMN machine_name TEXT;");
+    const existingDeps = db.prepare("SELECT id, data FROM deployments").all() as Array<{ id: string; data: string }>;
+    const updateStmt = db.prepare("UPDATE deployments SET machine_name = ? WHERE id = ?");
+    for (const row of existingDeps) {
+      try {
+        const parsed = JSON.parse(row.data);
+        if (parsed?.machineName) {
+          updateStmt.run(parsed.machineName, row.id);
+        }
+      } catch {}
+    }
+  }
+} catch (err) {
+  console.warn('Deployments schema migration check:', err);
+}
 
 // -------------------------------------------------------------
 // SEEDING DEFAULT DATA (if empty)
@@ -332,14 +353,28 @@ export function getAllDeployments(): DeploymentRecord[] {
 
 export function saveDeployment(dep: DeploymentRecord): DeploymentRecord {
   const existing = db.prepare('SELECT id FROM deployments WHERE id = ?').get(dep.id);
+  const machineName = dep.machineName || '';
   if (existing) {
-    db.prepare('UPDATE deployments SET data = ? WHERE id = ?').run(JSON.stringify(dep), dep.id);
+    try {
+      db.prepare('UPDATE deployments SET data = ?, machine_name = ? WHERE id = ?').run(JSON.stringify(dep), machineName, dep.id);
+    } catch {
+      db.prepare('UPDATE deployments SET data = ? WHERE id = ?').run(JSON.stringify(dep), dep.id);
+    }
   } else {
-    db.prepare('INSERT INTO deployments (id, data, started_at) VALUES (?, ?, ?)').run(
-      dep.id,
-      JSON.stringify(dep),
-      dep.startedAt || new Date().toISOString()
-    );
+    try {
+      db.prepare('INSERT INTO deployments (id, machine_name, data, started_at) VALUES (?, ?, ?, ?)').run(
+        dep.id,
+        machineName,
+        JSON.stringify(dep),
+        dep.startedAt || new Date().toISOString()
+      );
+    } catch {
+      db.prepare('INSERT INTO deployments (id, data, started_at) VALUES (?, ?, ?)').run(
+        dep.id,
+        JSON.stringify(dep),
+        dep.startedAt || new Date().toISOString()
+      );
+    }
   }
   return dep;
 }
@@ -711,13 +746,29 @@ export function getComputerHistory(machineName: string) {
   const compRow = db.prepare('SELECT data FROM ad_computers WHERE LOWER(name) = LOWER(?)').get(machineName) as { data: string } | undefined;
   const computer: ADComputer | null = compRow ? JSON.parse(compRow.data) : null;
 
-  // Deployments for this machine
-  const depRows = db.prepare('SELECT data FROM deployments WHERE LOWER(machine_name) = LOWER(?) ORDER BY started_at DESC').all(machineName) as Array<{ data: string }>;
-  const deployments: DeploymentRecord[] = depRows.map((r) => JSON.parse(r.data));
+  // Deployments for this machine (bulletproof: supports machine_name column and in-memory JSON fallback)
+  let deployments: DeploymentRecord[] = [];
+  try {
+    const depRows = db.prepare('SELECT data FROM deployments WHERE LOWER(machine_name) = LOWER(?) ORDER BY started_at DESC').all(machineName) as Array<{ data: string }>;
+    deployments = depRows.map((r) => JSON.parse(r.data));
+  } catch {
+    const allDeployments = getAllDeployments();
+    deployments = allDeployments.filter(
+      (d) => (d.machineName || '').toLowerCase() === machineName.toLowerCase()
+    );
+  }
 
   // Queued & completed agent tasks for this machine
-  const taskRows = db.prepare('SELECT data FROM queued_tasks WHERE LOWER(machine_name) = LOWER(?) ORDER BY created_at DESC').all(machineName) as Array<{ data: string }>;
-  const tasks: QueuedTask[] = taskRows.map((r) => JSON.parse(r.data));
+  let tasks: QueuedTask[] = [];
+  try {
+    const taskRows = db.prepare('SELECT data FROM queued_tasks WHERE LOWER(machine_name) = LOWER(?) ORDER BY created_at DESC').all(machineName) as Array<{ data: string }>;
+    tasks = taskRows.map((r) => JSON.parse(r.data));
+  } catch {
+    const allTasks = getAllQueuedTasks();
+    tasks = allTasks.filter(
+      (t) => (t.machineName || '').toLowerCase() === machineName.toLowerCase()
+    );
+  }
 
   // Packages map
   const allPkgs = getAllPackages();
