@@ -831,6 +831,34 @@ export function getDatabaseFilePath(): string {
   return dbPath;
 }
 
+// Helper: robust date parsing handling ISO strings, timestamps, and European DD.MM.YYYY formats
+function parseDateToIso(raw: any, fallback?: string): string {
+  if (!raw) return fallback || new Date().toISOString();
+  if (typeof raw === 'number' && !isNaN(raw)) {
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed === 'Invalid Date') return fallback || new Date().toISOString();
+    const d = new Date(trimmed);
+    if (!isNaN(d.getTime())) return d.toISOString();
+    // European / German DD.MM.YYYY [HH:mm[:ss]]
+    const euMatch = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[,\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+    if (euMatch) {
+      const day = parseInt(euMatch[1], 10);
+      const month = parseInt(euMatch[2], 10) - 1;
+      const year = parseInt(euMatch[3], 10);
+      const hour = euMatch[4] ? parseInt(euMatch[4], 10) : 0;
+      const min = euMatch[5] ? parseInt(euMatch[5], 10) : 0;
+      const sec = euMatch[6] ? parseInt(euMatch[6], 10) : 0;
+      const parsed = new Date(year, month, day, hour, min, sec);
+      if (!isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+  }
+  return fallback || new Date().toISOString();
+}
+
 // -------------------------------------------------------------
 // COMPUTER HISTORY & INSTALLATION AUDIT TIMELINE
 // -------------------------------------------------------------
@@ -875,21 +903,28 @@ export function getComputerHistory(machineName: string) {
   const enrichedTasks = tasks.map((t) => {
     const rawPayload: any = t.payload || {};
     const pkgIds: string[] = rawPayload.packageIds || (t as any).packageIds || [];
-    let pkgNames = Array.isArray(pkgIds) ? pkgIds.map((id) => pkgMap.get(id)?.name || id) : [];
+    let pkgNames = Array.isArray(pkgIds) ? pkgIds.map((id) => pkgMap.get(id)?.name || id).filter(Boolean) : [];
     if (pkgNames.length === 0 && Array.isArray((t as any).packageNames)) {
-      pkgNames = (t as any).packageNames;
+      pkgNames = (t as any).packageNames.filter(Boolean);
     }
     if (pkgNames.length === 0 && Array.isArray(rawPayload.packageNames)) {
-      pkgNames = rawPayload.packageNames;
+      pkgNames = rawPayload.packageNames.filter(Boolean);
     }
     if (pkgNames.length === 0 && Array.isArray((t as any).packages)) {
-      pkgNames = (t as any).packages;
+      pkgNames = (t as any).packages.filter(Boolean);
+    }
+    if (pkgNames.length === 0) {
+      if (t.taskType === 'SoftwareInstall' || t.taskType === 'SoftwareDeploy') {
+        pkgNames = ['Standard Software Deployment'];
+      } else if (t.taskType === 'CustomScript') {
+        pkgNames = ['PowerShell Administrative Script'];
+      }
     }
 
-    const fallbackTitle = t.title || `${t.taskType} on ${t.machineName}`;
+    const fallbackTitle = t.title || `${t.taskType || 'Task'} on ${t.machineName}`;
     const outputLog = t.resultLog || (t as any).outputLog || (t as any).log || '';
-    const startedAt = t.dispatchedAt || t.createdAt || new Date().toISOString();
-    const timestamp = t.completedAt || t.dispatchedAt || t.createdAt || new Date().toISOString();
+    const startedAt = parseDateToIso(t.dispatchedAt || t.createdAt);
+    const timestamp = parseDateToIso(t.completedAt || t.dispatchedAt || t.createdAt);
 
     return {
       ...t,
@@ -898,29 +933,46 @@ export function getComputerHistory(machineName: string) {
       outputLog,
       startedAt,
       timestamp,
+      createdAt: parseDateToIso(t.createdAt),
+      dispatchedAt: t.dispatchedAt ? parseDateToIso(t.dispatchedAt) : undefined,
+      completedAt: t.completedAt ? parseDateToIso(t.completedAt) : undefined,
     };
   });
 
   // Enrich deployments with customerName, durationSeconds, packageNames, typeLabel
   const compCustomer = computer ? customerMap.get(computer.customerProfileId) : undefined;
   const enrichedDeployments = deployments.map((d) => {
-    const cust = customerMap.get(d.customerProfileId) || compCustomer;
-    const startMs = d.startedAt ? new Date(d.startedAt).getTime() : NaN;
-    const endMs = d.completedAt ? new Date(d.completedAt).getTime() : startMs;
+    const cust = customerMap.get(d.customerProfileId) || compCustomer || allCustomers[0];
+    const rawCustName = (d.customerCompanyName || cust?.companyName || (cust as any)?.name || '').trim();
+    const customerName = rawCustName || (compCustomer?.companyName) || (allCustomers[0]?.companyName) || 'Corporate Client';
+    const domainName = (d.domainName || cust?.domainName || computer?.domain || 'corp.local').trim();
+
+    const startIso = parseDateToIso(d.startedAt);
+    const compIso = parseDateToIso(d.completedAt, startIso);
+    const startMs = new Date(startIso).getTime();
+    const endMs = new Date(compIso).getTime();
     const durationSeconds = !isNaN(startMs) && !isNaN(endMs) && endMs >= startMs ? Math.round((endMs - startMs) / 1000) : 0;
-    const pkgNames = (d.selectedPackageIds || []).map((id) => pkgMap.get(id)?.name || id);
-    const customerName = d.customerCompanyName || cust?.companyName || 'Corporate Client';
-    const domainName = d.domainName || cust?.domainName || computer?.domain || 'corp.local';
-    const timestamp = d.completedAt || d.startedAt || new Date().toISOString();
+
+    let pkgNames = (d.selectedPackageIds || []).map((id) => pkgMap.get(id)?.name || id).filter(Boolean);
+    if (pkgNames.length === 0 && computer && Array.isArray(computer.installedPackageIds) && computer.installedPackageIds.length > 0) {
+      pkgNames = computer.installedPackageIds.map((id) => pkgMap.get(id)?.name || id).filter(Boolean);
+    }
+    if (pkgNames.length === 0) {
+      pkgNames = ['Full System Configuration & Policies'];
+    }
+
+    const typeLabel = d.deploymentType === 'QuickSoftwareInstall' ? 'Quick Software Deploy' : 'Full Zero-Touch Provisioning';
 
     return {
       ...d,
       customerName,
       domainName,
-      timestamp,
+      startedAt: startIso,
+      completedAt: compIso,
+      timestamp: compIso,
       durationSeconds,
       packageNames: pkgNames,
-      typeLabel: d.deploymentType === 'QuickSoftwareInstall' ? 'Quick Software Deploy' : 'Full Zero-Touch Provisioning',
+      typeLabel,
     };
   });
 
@@ -939,10 +991,11 @@ export function getComputerHistory(machineName: string) {
 
   // 1. From deployments
   for (const dep of enrichedDeployments) {
+    const safeTitle = dep.customerName ? `${dep.customerName} — ${dep.typeLabel}` : dep.typeLabel;
     unifiedTimeline.push({
       id: `ev-dep-${dep.id}`,
       type: 'deployment',
-      title: `${dep.customerName} — ${dep.typeLabel}`,
+      title: safeTitle,
       subtitle: `Domain: ${dep.domainName || 'corp.local'} • ${dep.packageNames.length} package(s) staged`,
       status: dep.status === 'Completed' ? 'Completed' : (dep.status === 'Failed' ? 'Failed' : 'In Progress'),
       timestamp: dep.timestamp,
@@ -954,13 +1007,14 @@ export function getComputerHistory(machineName: string) {
 
   // 2. From agent tasks
   for (const t of enrichedTasks) {
+    const safeTaskTitle = t.title || `${t.taskType || 'Task'} on ${t.machineName}`;
     unifiedTimeline.push({
       id: `ev-task-${t.id}`,
       type: 'task',
-      title: t.title || `${t.taskType} on ${t.machineName}`,
-      subtitle: t.executor || (t.serviceAccount ? `Runner: ${t.serviceAccount}` : `Mode: ${t.executionMode}`),
+      title: safeTaskTitle,
+      subtitle: t.executor || (t.serviceAccount ? `Runner: ${t.serviceAccount}` : `Mode: ${t.executionMode || 'remote'}`),
       status: t.status === 'completed' || t.status === 'Completed' ? 'Completed' : (t.status === 'failed' || t.status === 'Failed' ? 'Failed' : 'Queued'),
-      timestamp: t.completedAt || t.dispatchedAt || t.createdAt,
+      timestamp: t.completedAt || t.dispatchedAt || t.createdAt || t.timestamp,
       actor: t.createdBy || t.executor || 'System',
       packages: t.packageNames,
       details: t.resultLog ? t.resultLog.slice(0, 150) : undefined,

@@ -37,6 +37,12 @@ interface PackageLibraryProps {
   onUpdatePackage?: (pkg: SoftwarePackage) => void;
   onDeletePackage: (id: string) => void;
   onOpenAIDetective: () => void;
+  geminiConfig?: {
+    enabled: boolean;
+    hasApiKey: boolean;
+    model?: string;
+    message?: string;
+  };
 }
 
 export const PackageLibrary: React.FC<PackageLibraryProps> = ({
@@ -45,6 +51,7 @@ export const PackageLibrary: React.FC<PackageLibraryProps> = ({
   onUpdatePackage,
   onDeletePackage,
   onOpenAIDetective,
+  geminiConfig,
 }) => {
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -415,15 +422,17 @@ export const PackageLibrary: React.FC<PackageLibraryProps> = ({
             <span>Add Package (UNC or Winget)</span>
           </button>
 
-          {/* AI Switch Detective Button */}
-          <button
-            onClick={onOpenAIDetective}
-            className="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-purple-300 hover:text-white border border-purple-800/60 text-xs font-semibold transition-all cursor-pointer"
-            title="Scan custom installer documentation with AI switch discovery"
-          >
-            <Sparkles className="w-4 h-4 text-purple-400" />
-            <span>AI Switch Detective</span>
-          </button>
+          {/* AI Switch Detective Button — Only visible when Gemini API key is configured */}
+          {Boolean(geminiConfig?.hasApiKey) && (
+            <button
+              onClick={onOpenAIDetective}
+              className="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-purple-300 hover:text-white border border-purple-800/60 text-xs font-semibold transition-all cursor-pointer"
+              title="Scan custom installer documentation with AI switch discovery"
+            >
+              <Sparkles className="w-4 h-4 text-purple-400" />
+              <span>AI Switch Detective</span>
+            </button>
+          )}
         </div>
       </div>
 

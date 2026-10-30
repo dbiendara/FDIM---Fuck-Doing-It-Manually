@@ -76,6 +76,24 @@ export const Header: React.FC<HeaderProps> = ({
   const brandName = appSettings?.corporateColors?.companyBrandName || 'FDIM Suite';
   const showProfanity = currentUser?.showProfanity !== false;
 
+  // Check if Gemini AI is active and an API key is available
+  const [hasGeminiKey, setHasGeminiKey] = useState<boolean>(() => {
+    return Boolean(appSettings?.geminiConfig?.hasApiKey && appSettings?.geminiConfig?.enabled);
+  });
+
+  useEffect(() => {
+    if (appSettings?.geminiConfig !== undefined) {
+      setHasGeminiKey(Boolean(appSettings.geminiConfig.hasApiKey && appSettings.geminiConfig.enabled));
+      return;
+    }
+    fetch('/api/ai/status')
+      .then((r) => r.json())
+      .then((data) => {
+        setHasGeminiKey(Boolean(data.enabled && data.hasApiKey));
+      })
+      .catch(() => setHasGeminiKey(false));
+  }, [appSettings?.geminiConfig]);
+
   // Check if the active tab belongs to the dropdown menu
   const isDropdownActive = [
     'quick-deploy',
@@ -84,7 +102,7 @@ export const Header: React.FC<HeaderProps> = ({
     'customers',
     'snippets',
     'library',
-    'ai-detective',
+    ...(hasGeminiKey ? ['ai-detective'] : []),
   ].includes(activeTab);
 
   // Close dropdown on outside click or Escape key
@@ -422,28 +440,30 @@ export const Header: React.FC<HeaderProps> = ({
                       </div>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => selectTabAndClose('ai-detective')}
-                      className={`w-full flex items-start space-x-3 p-2.5 rounded-xl text-left transition-colors cursor-pointer ${
-                        activeTab === 'ai-detective'
-                          ? 'bg-indigo-950/70 text-indigo-300 border border-indigo-800/60'
-                          : 'hover:bg-slate-800/70 text-slate-200'
-                      }`}
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-indigo-950 border border-indigo-800 flex items-center justify-center shrink-0 mt-0.5 text-indigo-400">
-                        <Sparkles className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-white flex items-center justify-between">
-                          <span>AI Silent Switch Detective</span>
-                          {activeTab === 'ai-detective' && <span className="text-[10px] text-indigo-400">Active</span>}
+                    {hasGeminiKey && (
+                      <button
+                        type="button"
+                        onClick={() => selectTabAndClose('ai-detective')}
+                        className={`w-full flex items-start space-x-3 p-2.5 rounded-xl text-left transition-colors cursor-pointer ${
+                          activeTab === 'ai-detective'
+                            ? 'bg-indigo-950/70 text-indigo-300 border border-indigo-800/60'
+                            : 'hover:bg-slate-800/70 text-slate-200'
+                        }`}
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-indigo-950 border border-indigo-800 flex items-center justify-center shrink-0 mt-0.5 text-indigo-400">
+                          <Sparkles className="w-4 h-4" />
                         </div>
-                        <p className="text-[11px] text-slate-400 leading-tight mt-0.5">
-                          AI installer switch extraction and file/registry detection rules
-                        </p>
-                      </div>
-                    </button>
+                        <div>
+                          <div className="text-xs font-bold text-white flex items-center justify-between">
+                            <span>AI Silent Switch Detective</span>
+                            {activeTab === 'ai-detective' && <span className="text-[10px] text-indigo-400">Active</span>}
+                          </div>
+                          <p className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                            AI installer switch extraction and file/registry detection rules
+                          </p>
+                        </div>
+                      </button>
+                    )}
 
                     {onOpenSetupWizard && (
                       <button

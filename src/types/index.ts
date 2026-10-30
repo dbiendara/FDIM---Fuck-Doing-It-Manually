@@ -248,6 +248,12 @@ export interface AppSettings {
     enforceHttps?: boolean;
   };
   corporateColors?: CorporateColorsConfig;
+  geminiConfig?: {
+    enabled: boolean;
+    hasApiKey: boolean;
+    model?: string;
+    message?: string;
+  };
 }
 
 export interface ADComputer {

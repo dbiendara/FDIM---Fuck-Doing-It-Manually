@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   SoftwarePackage,
   AIDetectionResult,
@@ -29,11 +29,18 @@ import {
 interface AIDetectiveProps {
   onAddPackage: (pkg: SoftwarePackage) => void;
   existingPackages: SoftwarePackage[];
+  geminiConfig?: {
+    enabled: boolean;
+    hasApiKey: boolean;
+    model?: string;
+    message?: string;
+  };
 }
 
 export const AIDetective: React.FC<AIDetectiveProps> = ({
   onAddPackage,
   existingPackages,
+  geminiConfig,
 }) => {
   // Input fields
   const [softwareName, setSoftwareName] = useState('Wireshark Network Analyzer');
@@ -52,6 +59,23 @@ export const AIDetective: React.FC<AIDetectiveProps> = ({
   const [testResult, setTestResult] = useState<AITestInstallResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [aiStatus, setAiStatus] = useState<{ enabled: boolean; hasApiKey: boolean; message?: string } | null>(
+    geminiConfig || null
+  );
+
+  // Check Gemini AI availability on server
+  useEffect(() => {
+    if (geminiConfig) {
+      setAiStatus(geminiConfig);
+      return;
+    }
+    fetch('/api/ai/status')
+      .then((r) => r.json())
+      .then((data) => setAiStatus(data))
+      .catch(() => setAiStatus({ enabled: false, hasApiKey: false, message: 'Gemini AI service unavailable' }));
+  }, [geminiConfig]);
+
+  const isGeminiActive = Boolean(aiStatus?.enabled && aiStatus?.hasApiKey);
 
   // Preset demo software samples
   const loadPreset = (preset: {
@@ -75,7 +99,7 @@ export const AIDetective: React.FC<AIDetectiveProps> = ({
   };
 
   // Run AI Silent Switch Detection
-  const handleDetectSwitches = async () => {
+  const handleDetectSwitches = async (offline = false) => {
     setIsScanning(true);
     setErrorMsg(null);
     setSavedSuccess(false);
@@ -92,6 +116,7 @@ export const AIDetective: React.FC<AIDetectiveProps> = ({
           uncPath,
           vendorDocUrl,
           docSnippet,
+          useOfflineFallback: offline,
         }),
       });
 
@@ -103,14 +128,14 @@ export const AIDetective: React.FC<AIDetectiveProps> = ({
       }
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(err.message || 'An error occurred during AI analysis');
+      setErrorMsg(err.message || 'An error occurred during installer analysis');
     } finally {
       setIsScanning(false);
     }
   };
 
-  // Run AI Sandbox Test Install Simulation
-  const handleRunTestInstall = async () => {
+  // Run Sandbox Test Install Simulation
+  const handleRunTestInstall = async (offline = false) => {
     if (!detectionResult) return;
     setIsTesting(true);
     setErrorMsg(null);
@@ -127,6 +152,7 @@ export const AIDetective: React.FC<AIDetectiveProps> = ({
           silentArgs: detectionResult.silentArgs,
           extraSwitches: detectionResult.extraSwitches,
           detectionRule: detectionResult.detectionRule,
+          useOfflineFallback: offline,
         }),
       });
 
@@ -368,30 +394,80 @@ export const AIDetective: React.FC<AIDetectiveProps> = ({
           </div>
         </div>
 
-        {/* Trigger Button */}
-        <div className="mt-6 flex items-center justify-between pt-4 border-t border-slate-800">
+        {/* Gemini Disabled Status Banner */}
+        {!isGeminiActive && (
+          <div className="mt-6 p-4 rounded-xl bg-amber-950/40 border border-amber-600/50 text-amber-200 text-xs flex items-start space-x-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-semibold text-amber-300 flex items-center space-x-2">
+                <span>Automatic Gemini AI Installer Feature Disabled</span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-900/70 border border-amber-700 text-amber-200">
+                  NO API KEY CONFIGURED
+                </span>
+              </div>
+              <p className="text-amber-200/90 leading-relaxed">
+                No <code className="font-mono text-amber-100 bg-amber-950/80 px-1 py-0.5 rounded">GEMINI_API_KEY</code> environment variable was provided on the server. The automated Gemini-powered inspection is disabled. You can use the built-in <strong>Offline Heuristic Packaging Engine</strong> to detect switches for MSI, Inno Setup, NSIS, WiX Burn, InstallShield, and Squirrel installers, or run local sandbox installations.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Trigger Action Bar */}
+        <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-800">
           <div className="text-xs text-slate-400 flex items-center space-x-1.5">
-            <Info className="w-3.5 h-3.5 text-purple-400" />
-            <span>AI model will scan documentation syntax and detect silent arguments automatically.</span>
+            <Info className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+            <span>
+              {isGeminiActive
+                ? 'Gemini AI will scan documentation syntax and detect silent arguments automatically.'
+                : 'Offline heuristic engine will evaluate framework binary signatures and packaging syntax.'}
+            </span>
           </div>
 
-          <button
-            onClick={handleDetectSwitches}
-            disabled={isScanning || !softwareName}
-            className="flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs sm:text-sm shadow-lg shadow-purple-600/30 transition-all disabled:opacity-50 cursor-pointer"
-          >
-            {isScanning ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Scanning Documentation & Binaries...</span>
-              </>
+          <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto justify-end">
+            {/* Always-Active Offline Heuristic Rule Engine Button */}
+            <button
+              onClick={() => handleDetectSwitches(true)}
+              disabled={isScanning || !softwareName}
+              className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                !isGeminiActive
+                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg shadow-cyan-600/30'
+                  : 'bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-cyan-800/60'
+              } disabled:opacity-50`}
+              title="Run offline rule-based heuristic detection"
+            >
+              <Terminal className="w-4 h-4 text-cyan-400" />
+              <span>RUN OFFLINE HEURISTIC DETECTION</span>
+            </button>
+
+            {/* Gemini Scan Button: Enabled if API key is present, explicitly disabled otherwise */}
+            {isGeminiActive ? (
+              <button
+                onClick={() => handleDetectSwitches(false)}
+                disabled={isScanning || !softwareName}
+                className="flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs sm:text-sm shadow-lg shadow-purple-600/30 transition-all disabled:opacity-50 cursor-pointer"
+              >
+                {isScanning ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Scanning with Gemini...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>GEMINI AI SCAN & DETECT</span>
+                  </>
+                )}
+              </button>
             ) : (
-              <>
-                <Sparkles className="w-4 h-4" />
-                <span>AI SCAN & DETECT SILENT SWITCHES</span>
-              </>
+              <div
+                className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-500 text-xs font-semibold select-none cursor-not-allowed"
+                title="Gemini scan disabled: No GEMINI_API_KEY environment variable provided"
+              >
+                <Sparkles className="w-4 h-4 text-slate-600" />
+                <span>Gemini Scan Disabled (No Key)</span>
+              </div>
             )}
-          </button>
+          </div>
         </div>
 
         {errorMsg && (
@@ -411,12 +487,22 @@ export const AIDetective: React.FC<AIDetectiveProps> = ({
                 <Sparkles className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-                  <span>Silent Install Specification Identified</span>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-mono font-medium">
-                    {detectionResult.confidenceScore}% Confidence
+                <div className="flex items-center space-x-2">
+                  <h3 className="text-lg font-bold text-white">
+                    Silent Install Specification Identified
+                  </h3>
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded-full font-mono font-medium ${
+                      (detectionResult as any).geminiDisabled || !isGeminiActive
+                        ? 'bg-cyan-950 text-cyan-300 border border-cyan-800'
+                        : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                    }`}
+                  >
+                    {(detectionResult as any).geminiDisabled || !isGeminiActive
+                      ? 'Offline Heuristic Engine'
+                      : `${detectionResult.confidenceScore}% Confidence (Gemini AI)`}
                   </span>
-                </h3>
+                </div>
                 <p className="text-xs text-slate-400">
                   Installer Framework: <strong className="text-cyan-400">{detectionResult.installerType}</strong> • Category: {detectionResult.category}
                 </p>
@@ -426,9 +512,9 @@ export const AIDetective: React.FC<AIDetectiveProps> = ({
             {/* Test Install Button */}
             <div className="flex items-center space-x-3">
               <button
-                onClick={handleRunTestInstall}
+                onClick={() => handleRunTestInstall(!isGeminiActive)}
                 disabled={isTesting}
-                className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-md shadow-cyan-600/20 transition-all disabled:opacity-50"
+                className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-md shadow-cyan-600/20 transition-all disabled:opacity-50 cursor-pointer"
               >
                 {isTesting ? (
                   <>

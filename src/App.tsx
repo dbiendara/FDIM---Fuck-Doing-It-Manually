@@ -322,6 +322,13 @@ export default function App() {
       .catch((err) => console.error('Error fetching initial setup data:', err));
   }, []);
 
+  // Guard against navigating to ai-detective if no Gemini API key is available
+  useEffect(() => {
+    if (activeTab === 'ai-detective' && appSettings?.geminiConfig && !appSettings.geminiConfig.hasApiKey) {
+      setActiveTab('library');
+    }
+  }, [activeTab, appSettings]);
+
   const activeCustomer = customers.find((c) => c.id === selectedCustomerId) || customers[0] || {
     id: 'default',
     companyName: 'Corporate Client',
@@ -781,6 +788,7 @@ export default function App() {
           <AIDetective
             onAddPackage={handleAddPackage}
             existingPackages={packages}
+            geminiConfig={appSettings.geminiConfig}
           />
         )}
 
@@ -791,6 +799,7 @@ export default function App() {
             onUpdatePackage={handleUpdatePackage}
             onDeletePackage={handleDeletePackage}
             onOpenAIDetective={() => setActiveTab('ai-detective')}
+            geminiConfig={appSettings.geminiConfig}
           />
         )}
 
