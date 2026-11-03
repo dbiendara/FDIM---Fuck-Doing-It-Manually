@@ -244,7 +244,7 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
     if (!newPrinterPath) return;
     const printer: PrinterMapping = {
       id: `prn-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      name: newPrinterName.trim() || newPrinterPath.split('\\').pop() || 'Network Printer',
+      name: newPrinterName.trim() || (newPrinterPath ? newPrinterPath.split('\\').pop() : 'Network Printer') || 'Network Printer',
       connectionType: newPrinterType,
       pathOrIp: newPrinterPath.trim(),
       isDefault: newPrinterDefault,
@@ -1310,7 +1310,7 @@ export const CustomerProfilesManager: React.FC<CustomerProfilesManagerProps> = (
                         key={pkg.id}
                         className="text-[10px] px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 text-slate-300 font-medium"
                       >
-                        {pkg.name.split(' ')[0]} {pkg.name.includes('TeamViewer') ? 'Host' : ''}
+                        {(pkg.name || 'Package').split(' ')[0]} {pkg.name?.includes('TeamViewer') ? 'Host' : ''}
                       </span>
                     ))}
                     {assignedPackages.length === 0 && (

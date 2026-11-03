@@ -13,7 +13,7 @@ import {
   QueuedTask,
   PackageSandboxTest,
   UserLogonStagingSnippet,
-} from '../src/types';
+} from '../src/types/index.ts';
 
 const dataDir = path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(dataDir)) {

@@ -1074,7 +1074,7 @@ foreach ($Target in $Targets) {
               <option value="all">All Organizational Units (OUs)</option>
               {uniqueOus.map((ou) => (
                 <option key={ou} value={ou}>
-                  {ou.split(',')[0]} ({ou})
+                  {ou ? ou.split(',')[0] : 'OU'} ({ou})
                 </option>
               ))}
             </select>

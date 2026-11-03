@@ -1028,12 +1028,20 @@ app.delete('/api/packages/:id', (req, res) => {
 });
 
 // Customer Profiles API (SQLite backed)
-app.get('/api/profiles', (req, res) => {
+app.get(['/api/profiles', '/api/customers'], (req, res) => {
   const profiles = getAllCustomers();
   res.json(profiles);
 });
 
-app.post('/api/profiles', (req, res) => {
+app.get(['/api/profiles/:id', '/api/customers/:id'], (req, res) => {
+  const profile = getCustomerById(req.params.id);
+  if (!profile) {
+    return res.status(404).json({ error: 'Customer profile not found' });
+  }
+  res.json(profile);
+});
+
+app.post(['/api/profiles', '/api/customers'], (req, res) => {
   const settings = getAppSettings();
   const newProfile: CustomerProfile = {
     id: req.body.id || `cust-${Date.now().toString(36)}`,
@@ -1044,7 +1052,7 @@ app.post('/api/profiles', (req, res) => {
   res.status(201).json(newProfile);
 });
 
-app.put('/api/profiles/:id', (req, res) => {
+app.put(['/api/profiles/:id', '/api/customers/:id'], (req, res) => {
   const updated: CustomerProfile = {
     id: req.params.id,
     ...req.body,
@@ -1053,7 +1061,7 @@ app.put('/api/profiles/:id', (req, res) => {
   res.json(updated);
 });
 
-app.delete('/api/profiles/:id', (req, res) => {
+app.delete(['/api/profiles/:id', '/api/customers/:id'], (req, res) => {
   const success = deleteCustomer(req.params.id);
   if (!success) {
     return res.status(404).json({ error: 'Profile not found' });
@@ -2677,7 +2685,7 @@ app.post('/api/agent/tasks/:id/retry', (req, res) => {
   res.json({ success: true, task });
 });
 
-app.delete('/api/agent/tasks/:id', (req, res) => {
+app.delete(['/api/agent/tasks/:id', '/api/queued-tasks/:id'], (req, res) => {
   const success = deleteQueuedTask(req.params.id);
   res.json({ success, deletedId: req.params.id });
 });
@@ -3183,7 +3191,7 @@ app.get('/api/server-runner/script', (req, res) => {
 });
 
 // 5. Download Central Server Runner Service / Scheduled Task Installer
-app.get('/api/server-runner/install-service', (req, res) => {
+app.get(['/api/server-runner/install-service', '/api/server-runner/installer'], (req, res) => {
   const settings = getAppSettings();
   const effectiveServerUrl = (req.query.serverUrl as string) || (settings.agentConfig?.serverUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
   const pollInterval = parseInt(req.query.interval as string) || 30;
@@ -4228,7 +4236,7 @@ app.put('/api/settings', (req, res) => {
   res.json(updated);
 });
 
-app.get('/api/database/info', (req, res) => {
+app.get(['/api/database/info', '/api/settings/db-info'], (req, res) => {
   try {
     res.json(getDatabaseMetadata());
   } catch (err: any) {

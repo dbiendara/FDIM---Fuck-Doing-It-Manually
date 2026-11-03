@@ -410,7 +410,7 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
     if (!wPrinterPath) return;
     const newPrn: PrinterMapping = {
       id: `prn-${Date.now()}`,
-      name: wPrinterName.trim() || wPrinterPath.split('\\').pop() || 'Network Printer',
+      name: wPrinterName.trim() || (wPrinterPath ? wPrinterPath.split('\\').pop() : 'Network Printer') || 'Network Printer',
       connectionType: wPrinterType,
       pathOrIp: wPrinterPath.trim(),
       isDefault: wPrinterDefault,
@@ -781,8 +781,8 @@ export const NewPCWizard: React.FC<NewPCWizardProps> = ({
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Admin Group:</span>
-                      <span className="font-mono text-cyan-400 truncate max-w-[140px]" title={cust.defaultAdAdminGroup}>
-                        {cust.defaultAdAdminGroup.split('\\')[1] || cust.defaultAdAdminGroup}
+                      <span className="font-mono text-cyan-400 truncate max-w-[140px]" title={cust.defaultAdAdminGroup || 'Domain Admins'}>
+                        {cust.defaultAdAdminGroup ? (cust.defaultAdAdminGroup.split('\\')[1] || cust.defaultAdAdminGroup) : 'Domain Admins'}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">

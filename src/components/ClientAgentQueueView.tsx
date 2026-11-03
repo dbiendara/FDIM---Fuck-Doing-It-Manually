@@ -811,7 +811,7 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
                       </div>
                       <div>
                         <span className="text-[10px] text-slate-500 block uppercase font-semibold">OU Path</span>
-                        <span className="text-slate-300 truncate block">{comp.ouPath.split(',')[0]}</span>
+                        <span className="text-slate-300 truncate block">{comp.ouPath ? comp.ouPath.split(',')[0] : 'Workstations'}</span>
                       </div>
                     </div>
 
