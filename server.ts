@@ -54,7 +54,7 @@ import {
   deleteFirstRunSnippet,
   seedInitialFirstRunSnippetsIfEmpty,
 } from './server/db.ts';
-import { AuthUser, ADComputer, QueuedTask, PackageSandboxTest, ServerRunnerInfo } from './src/types';
+import { AuthUser, ADComputer, QueuedTask, PackageSandboxTest, ServerRunnerInfo, AgentExecutionLog } from './src/types';
 
 const execFileAsync = promisify(execFile);
 
@@ -2867,6 +2867,14 @@ app.post('/api/agent/tasks/:id/report', (req, res) => {
     }
   }
 
+  broadcastAgentLog({
+    taskId: task.id,
+    machineName: task.machineName,
+    level: updatedStatus === 'completed' ? 'success' : 'error',
+    message: `[Task Report] ${task.title} finished on [${task.machineName}]: ${updatedStatus.toUpperCase()} (ExitCode: ${exitCode ?? (updatedStatus === 'completed' ? 0 : 1)})`,
+    exitCode: exitCode ?? (updatedStatus === 'completed' ? 0 : 1),
+  });
+
   res.json({ success: true, task: updated });
 });
 
@@ -3255,6 +3263,106 @@ interface LiveDeploymentSession {
 
 const liveDeploymentSessions = new Map<string, LiveDeploymentSession>();
 
+// -------------------------------------------------------------
+// REAL-TIME REMOTE AGENT EXECUTION LOGGING ENGINE (SSE & LONG-POLLING)
+// -------------------------------------------------------------
+const MAX_AGENT_LIVE_LOGS = 2500;
+const agentLiveLogs: AgentExecutionLog[] = [
+  {
+    id: 'log-seed-1',
+    taskId: 'system-startup',
+    machineName: 'CSPC03',
+    timestamp: new Date(Date.now() - 360000).toLocaleTimeString('en-GB', { hour12: false }),
+    isoTime: new Date(Date.now() - 360000).toISOString(),
+    level: 'info',
+    message: 'Client Agent daemon initialized on CSPC03. Scheduled Task running under NT AUTHORITY\\SYSTEM.',
+  },
+  {
+    id: 'log-seed-2',
+    taskId: 'system-startup',
+    machineName: 'CSPC03',
+    timestamp: new Date(Date.now() - 355000).toLocaleTimeString('en-GB', { hour12: false }),
+    isoTime: new Date(Date.now() - 355000).toISOString(),
+    level: 'success',
+    message: 'Heartbeat signal acknowledged by FDIM server. Pre-shared key authentication verified.',
+  },
+  {
+    id: 'log-seed-3',
+    taskId: 'system-startup',
+    machineName: 'CSPC03',
+    timestamp: new Date(Date.now() - 350000).toLocaleTimeString('en-GB', { hour12: false }),
+    isoTime: new Date(Date.now() - 350000).toISOString(),
+    level: 'info',
+    message: 'Workstation ready for remote silent software installation and configuration jobs.',
+  },
+];
+
+const agentSseClients = new Set<express.Response>();
+const agentLongPollWaiters = new Set<{
+  id: string;
+  res: express.Response;
+  timer: NodeJS.Timeout;
+  machineName?: string;
+  taskId?: string;
+  sinceIso?: string;
+}>();
+
+export function broadcastAgentLog(log: Omit<AgentExecutionLog, 'id' | 'timestamp' | 'isoTime'> & { id?: string; timestamp?: string; isoTime?: string }): AgentExecutionLog {
+  const now = new Date();
+  const entry: AgentExecutionLog = {
+    id: log.id || `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    taskId: log.taskId || 'general',
+    machineName: (log.machineName || 'REMOTE-PC').toUpperCase().trim(),
+    timestamp: log.timestamp || now.toLocaleTimeString('en-GB', { hour12: false }),
+    isoTime: log.isoTime || now.toISOString(),
+    level: log.level || 'info',
+    message: String(log.message || ''),
+    stepId: log.stepId,
+    stepStatus: log.stepStatus,
+    packageId: log.packageId,
+    packageName: log.packageName,
+    progressPercent: log.progressPercent,
+    installerType: log.installerType,
+    exitCode: log.exitCode,
+  };
+
+  agentLiveLogs.push(entry);
+  if (agentLiveLogs.length > MAX_AGENT_LIVE_LOGS) {
+    agentLiveLogs.splice(0, agentLiveLogs.length - MAX_AGENT_LIVE_LOGS);
+  }
+
+  // 1. Broadcast to SSE clients
+  const sseData = `data: ${JSON.stringify(entry)}\n\n`;
+  for (const client of Array.from(agentSseClients)) {
+    try {
+      client.write(sseData);
+    } catch {
+      agentSseClients.delete(client);
+    }
+  }
+
+  // 2. Resolve Long-Polling Waiters
+  for (const waiter of Array.from(agentLongPollWaiters)) {
+    const machineMatch = !waiter.machineName || waiter.machineName === 'ALL' || waiter.machineName.toUpperCase() === entry.machineName;
+    const taskMatch = !waiter.taskId || waiter.taskId === entry.taskId;
+    if (machineMatch && taskMatch) {
+      clearTimeout(waiter.timer);
+      agentLongPollWaiters.delete(waiter);
+      try {
+        waiter.res.json({
+          success: true,
+          mode: 'long-polling',
+          logs: [entry],
+          serverTime: now.toISOString(),
+        });
+      } catch {}
+    }
+  }
+
+  return entry;
+}
+
+
 function buildLiveDeploymentScript(session: LiveDeploymentSession, serverUrl: string): string {
   const allPackages = getAllPackages();
   const targetPackages = allPackages.filter((p) => (session.packageIds || []).includes(p.id));
@@ -3494,6 +3602,7 @@ app.get('/api/agent/tasks/:id/script', (req, res) => {
     agentConnected: true,
   };
 
+  liveDeploymentSessions.set(pseudoSession.id, pseudoSession);
   const script = buildLiveDeploymentScript(pseudoSession, effectiveServerUrl);
   res.type('text/plain; charset=utf-8').send(script);
 });
@@ -3783,6 +3892,16 @@ app.post('/api/deployments/live/:sessionId/log', (req, res) => {
       level: safeLevel,
       message: String(message),
     });
+
+    broadcastAgentLog({
+      taskId: session.queuedTaskId || (session.id.startsWith('task-run-') ? session.id.replace('task-run-', '') : session.id),
+      machineName: session.machineName,
+      level: safeLevel,
+      message: String(message),
+      stepId,
+      stepStatus,
+      timestamp: timeStr,
+    });
   }
 
   if (stepId) {
@@ -3876,6 +3995,16 @@ app.post('/api/deployments/live/:sessionId/complete', (req, res) => {
     );
   }
 
+  broadcastAgentLog({
+    taskId: session.queuedTaskId || (session.id.startsWith('task-run-') ? session.id.replace('task-run-', '') : session.id),
+    machineName: session.machineName,
+    level: isOk ? 'success' : 'error',
+    message: `[Deployment Complete] Session ${session.id} finished on [${session.machineName}]: Status=${isOk ? 'COMPLETED' : 'FAILED'} (ExitCode: ${session.exitCode}).`,
+    stepId: 'step-postflight-audit',
+    stepStatus: isOk ? 'success' : 'error',
+    exitCode: session.exitCode,
+  });
+
   res.json({ success: true, record });
 });
 
@@ -3931,6 +4060,205 @@ app.post('/api/deployments/live/:sessionId/simulate', async (req, res) => {
 
   res.json({ success: true, message: 'Simulation started' });
 });
+
+// -------------------------------------------------------------
+// REAL-TIME REMOTE AGENT EXECUTION LOGGING & LONG-POLLING API
+// -------------------------------------------------------------
+// 1. Ingest real-time agent execution log line from remote PC
+app.post(['/api/agent/logs', '/api/agent/tasks/:id/log'], (req, res) => {
+  const taskId = req.params.id || req.body.taskId || 'general';
+  const {
+    machineName,
+    level,
+    message,
+    stepId,
+    stepStatus,
+    packageId,
+    packageName,
+    progressPercent,
+    installerType,
+    exitCode,
+    timestamp,
+  } = req.body;
+
+  const log = broadcastAgentLog({
+    taskId,
+    machineName: machineName || 'REMOTE-PC',
+    level: level || 'info',
+    message: String(message || ''),
+    stepId,
+    stepStatus,
+    packageId,
+    packageName,
+    progressPercent: typeof progressPercent === 'number' ? progressPercent : undefined,
+    installerType,
+    exitCode: typeof exitCode === 'number' ? exitCode : undefined,
+    timestamp,
+  });
+
+  res.json({ success: true, logId: log.id });
+});
+
+// 2. Poll or Long-Poll real-time agent execution logs
+app.get('/api/agent/live-logs', (req, res) => {
+  const { since, machineName, taskId, level, limit, poll } = req.query;
+  const isPoll = poll === 'true' || poll === '1';
+  const maxLimit = parseInt(limit as string, 10) || 200;
+
+  const filterLogs = (logsSince?: string) => {
+    let list = agentLiveLogs;
+    if (machineName && machineName !== 'ALL') {
+      list = list.filter((l) => l.machineName.toUpperCase() === (machineName as string).toUpperCase());
+    }
+    if (taskId && taskId !== 'ALL') {
+      list = list.filter((l) => l.taskId === taskId);
+    }
+    if (level && level !== 'ALL') {
+      list = list.filter((l) => l.level === level);
+    }
+    if (logsSince) {
+      list = list.filter((l) => l.isoTime > logsSince);
+    }
+    return list.slice(-maxLimit);
+  };
+
+  const currentMatched = filterLogs(typeof since === 'string' && since ? since : undefined);
+
+  // If long-polling is requested, a "since" timestamp was provided, and there are NO new logs yet:
+  if (isPoll && typeof since === 'string' && since && currentMatched.length === 0) {
+    const waiterId = `waiter-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const timer = setTimeout(() => {
+      for (const w of Array.from(agentLongPollWaiters)) {
+        if (w.id === waiterId) {
+          agentLongPollWaiters.delete(w);
+          break;
+        }
+      }
+      try {
+        res.json({
+          success: true,
+          mode: 'long-polling',
+          logs: [],
+          timeout: true,
+          serverTime: new Date().toISOString(),
+        });
+      } catch {}
+    }, 15000);
+
+    const waiter = {
+      id: waiterId,
+      res,
+      timer,
+      machineName: typeof machineName === 'string' ? machineName : undefined,
+      taskId: typeof taskId === 'string' ? taskId : undefined,
+      sinceIso: since,
+    };
+
+    agentLongPollWaiters.add(waiter);
+
+    req.on('close', () => {
+      clearTimeout(timer);
+      agentLongPollWaiters.delete(waiter);
+    });
+    return;
+  }
+
+  res.json({
+    success: true,
+    mode: isPoll ? 'long-polling' : 'poll',
+    logs: currentMatched,
+    totalBuffered: agentLiveLogs.length,
+    serverTime: new Date().toISOString(),
+  });
+});
+
+// 3. Server-Sent Events (SSE) streaming endpoint for zero-latency push
+app.get('/api/agent/live-logs/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(': connected\n\n');
+
+  res.write(`data: ${JSON.stringify({ type: 'connected', serverTime: new Date().toISOString(), bufferedCount: agentLiveLogs.length })}\n\n`);
+
+  agentSseClients.add(res);
+
+  const heartbeatInterval = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      clearInterval(heartbeatInterval);
+      agentSseClients.delete(res);
+    }
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(heartbeatInterval);
+    agentSseClients.delete(res);
+  });
+});
+
+// 4. Interactive Simulation of Remote Silent Install for UI Testing
+app.post('/api/agent/live-logs/simulate', async (req, res) => {
+  const { machineName, packageName, installerType, silentArgs } = req.body;
+  const targetMachine = (machineName || 'CSPC03').toUpperCase().trim();
+  const pkgName = packageName || '7-Zip Enterprise 24.08';
+  const type = installerType || 'MSI';
+  const args = silentArgs || '/qn /norestart';
+  const simTaskId = `task-sim-${Date.now().toString(36)}`;
+
+  res.json({
+    success: true,
+    message: `Started live remote silent install simulation for [${pkgName}] on target [${targetMachine}]`,
+    taskId: simTaskId,
+  });
+
+  const steps = [
+    { delay: 150, level: 'info', msg: `[Preflight] Workstation Agent on [${targetMachine}] received job dispatch [${simTaskId}]` },
+    { delay: 750, level: 'running', msg: `[Preflight] Validating high-integrity administrator rights (NT AUTHORITY\\SYSTEM) on ${targetMachine}` },
+    { delay: 1500, level: 'success', msg: `[Preflight] Administrator elevation verified. WinRM remote execution context active.` },
+    { delay: 2300, level: 'info', msg: `[Network] Testing SMB connectivity to distribution share: \\\\corp-fs01\\software$\\${pkgName.replace(/[^a-zA-Z0-9]/g, '')}` },
+    { delay: 3100, level: 'success', msg: `[Network] Share reachable (latency: 1.4ms). Installer verified.` },
+    { delay: 3900, level: 'running', msg: `[Install] Spawning silent installer: msiexec.exe /i "\\\\corp-fs01\\software$\\${pkgName}.msi" ${args}`, progressPercent: 25 },
+    { delay: 5100, level: 'info', msg: `[Install] Windows Installer Service (MSIServer) active. Writing files & registering components...`, progressPercent: 55 },
+    { delay: 6500, level: 'success', msg: `[Install] Process finished with Exit Code: 0 (SUCCESS - No reboot required)`, progressPercent: 85, exitCode: 0 },
+    { delay: 7300, level: 'info', msg: `[Detection] Executing compliance detection check: FilePath [C:\\Program Files\\7-Zip\\7z.exe]` },
+    { delay: 8100, level: 'success', msg: `[Detection] Detection rule verified: Target binary present (v24.08). Package installed.`, progressPercent: 100 },
+    { delay: 8900, level: 'success', msg: `[Signoff] Silent install pipeline for [${pkgName}] on [${targetMachine}] completed successfully.` },
+  ];
+
+  for (const step of steps) {
+    setTimeout(() => {
+      broadcastAgentLog({
+        taskId: simTaskId,
+        machineName: targetMachine,
+        level: step.level as any,
+        message: step.msg,
+        packageName: pkgName,
+        progressPercent: step.progressPercent,
+        installerType: type,
+        exitCode: step.exitCode,
+      });
+    }, step.delay);
+  }
+});
+
+// 5. Clear live execution logs buffer
+app.post(['/api/agent/live-logs/clear', '/api/agent/live-logs/purge'], (req, res) => {
+  const count = agentLiveLogs.length;
+  agentLiveLogs.length = 0;
+  res.json({ success: true, clearedCount: count });
+});
+
+app.delete('/api/agent/live-logs', (req, res) => {
+  const count = agentLiveLogs.length;
+  agentLiveLogs.length = 0;
+  res.json({ success: true, clearedCount: count });
+});
+
 
 // -------------------------------------------------------------
 // CLIENT AGENT & WAIT-TASKS QUEUE API

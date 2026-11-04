@@ -6,6 +6,7 @@ import {
   SoftwarePackage,
   ServerRunnerInfo,
 } from '../types';
+import { AgentLiveLogMonitor } from './AgentLiveLogMonitor';
 import {
   Radio,
   Clock,
@@ -47,7 +48,7 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
   customers,
   packages,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'server-runner' | 'queue' | 'agents'>('server-runner');
+  const [activeSubTab, setActiveSubTab] = useState<'live-logs' | 'server-runner' | 'queue' | 'agents'>('live-logs');
   const [tasks, setTasks] = useState<QueuedTask[]>([]);
   const [computers, setComputers] = useState<ADComputer[]>([]);
   const [serverRunner, setServerRunner] = useState<ServerRunnerInfo | null>(null);
@@ -274,12 +275,25 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
       </div>
 
       {/* Navigation Sub-Tabs */}
-      <div className="flex border-b border-slate-800 text-xs font-semibold px-2">
+      <div className="flex border-b border-slate-800 text-xs font-semibold px-2 overflow-x-auto">
+        <button
+          onClick={() => setActiveSubTab('live-logs')}
+          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer shrink-0 ${
+            activeSubTab === 'live-logs'
+              ? 'border-cyan-500 text-cyan-400 bg-cyan-950/20'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Terminal className="w-4 h-4 text-cyan-400" />
+          <span>Live Execution Monitor</span>
+          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+        </button>
+
         <button
           onClick={() => setActiveSubTab('server-runner')}
-          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
+          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer shrink-0 ${
             activeSubTab === 'server-runner'
-              ? 'border-emerald-500 text-emerald-400'
+              ? 'border-emerald-500 text-emerald-400 bg-emerald-950/20'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -294,9 +308,9 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
 
         <button
           onClick={() => setActiveSubTab('queue')}
-          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
+          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer shrink-0 ${
             activeSubTab === 'queue'
-              ? 'border-cyan-500 text-cyan-400'
+              ? 'border-cyan-500 text-cyan-400 bg-cyan-950/20'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -306,9 +320,9 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
 
         <button
           onClick={() => setActiveSubTab('agents')}
-          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
+          className={`py-3 px-4 border-b-2 flex items-center space-x-2 transition-colors cursor-pointer shrink-0 ${
             activeSubTab === 'agents'
-              ? 'border-cyan-500 text-cyan-400'
+              ? 'border-cyan-500 text-cyan-400 bg-cyan-950/20'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -316,6 +330,15 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
           <span>Local Client Agents ({agentComputers.length})</span>
         </button>
       </div>
+
+      {/* VIEW: LIVE REMOTE EXECUTION MONITOR (WEBSOCKET / SSE & LONG-POLL) */}
+      {activeSubTab === 'live-logs' && (
+        <AgentLiveLogMonitor
+          computers={computers}
+          packages={packages}
+          tasks={tasks}
+        />
+      )}
 
       {/* VIEW 0: CENTRAL SERVER RUNNER (ZERO-AGENT REMOTE WINRM) */}
       {activeSubTab === 'server-runner' && (

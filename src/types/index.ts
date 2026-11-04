@@ -395,3 +395,19 @@ export interface AITestInstallResult {
   recommendedTweaks?: string[];
 }
 
+export interface AgentExecutionLog {
+  id: string;
+  taskId: string;
+  machineName: string;
+  timestamp: string;
+  isoTime: string;
+  level: 'info' | 'running' | 'success' | 'warn' | 'error';
+  message: string;
+  stepId?: string;
+  stepStatus?: 'pending' | 'running' | 'success' | 'warn' | 'error';
+  packageId?: string;
+  packageName?: string;
+  progressPercent?: number;
+  installerType?: string;
+  exitCode?: number;
+}
