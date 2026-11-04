@@ -65,7 +65,10 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.set('trust proxy', true);
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const args = process.argv.slice(2);
+const portArgIndex = args.indexOf('--port');
+const cliPort = portArgIndex !== -1 && args[portArgIndex + 1] ? parseInt(args[portArgIndex + 1], 10) : undefined;
+const PORT = cliPort || 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -5828,6 +5831,7 @@ async function startServer() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
+        hmr: false,
         watch: {
           ignored: [
             '**/data/**',
