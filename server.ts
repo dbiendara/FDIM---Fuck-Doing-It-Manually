@@ -3478,18 +3478,26 @@ ${targetPackages.map((p, idx) => {
     return `
 # Package [${idx + 1}/${targetPackages.length}]: ${p.name} via Winget
 try {
-    Send-LiveLog "Installing [${p.name}] via Windows Package Manager (ID: ${wingetId})..." "INFO" "${stepId}" "running"
-    $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
-    $wingetExe = if ($wingetCmd) { "winget" } else {
-        $localWinget = "$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\winget.exe"
-        if (Test-Path $localWinget) { $localWinget } else { "winget" }
+    # Resolve real winget binary across user desktop, WinRM, and Session 0 (NT AUTHORITY\SYSTEM)
+    $resolvedWinget = (Resolve-Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_*__8wekyb3d8bbwe\winget.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1).Path
+    $wingetExe = if ($resolvedWinget -and (Test-Path $resolvedWinget)) {
+        $resolvedWinget
+    } else {
+        $localWinget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+        if (Test-Path $localWinget) { $localWinget } else {
+            $cmd = Get-Command winget -ErrorAction SilentlyContinue
+            if ($cmd) { $cmd.Source } else { "winget.exe" }
+        }
     }
-    $args = "install --id \`"${wingetId}\`" --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity${wingetExtra}".Trim()
+    $args = "install --id \`"${wingetId}\`" --exact --silent --scope machine --accept-package-agreements --accept-source-agreements --disable-interactivity${wingetExtra}".Trim()
     Send-LiveLog "Executing: $wingetExe $args" "INFO" "${stepId}" "running"
     $proc = Start-Process -FilePath $wingetExe -ArgumentList $args -Wait -PassThru -NoNewWindow
     if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
         Send-LiveLog "Package [${p.name}] installed successfully (ExitCode: $($proc.ExitCode))." "SUCCESS" "${stepId}" "success"
         $SuccessCount++
+    } elseif ($proc.ExitCode -eq -196608) {
+        Send-LiveLog "Package [${p.name}] failed with ExitCode -196608 (0xFFFD0000: Windows AppX Execution Alias blocked in non-interactive Session 0 / SYSTEM context). Direct UNC/MSI installer recommended." "ERROR" "${stepId}" "error"
+        $FailCount++
     } else {
         Send-LiveLog "Package [${p.name}] returned exit code $($proc.ExitCode)." "WARN" "${stepId}" "warn"
         $FailCount++
@@ -5005,17 +5013,26 @@ ${targetPackages
 # Package [${i + 1}/${targetPackages.length}]: ${p.name} via Winget
 try {
     Write-QuickLog "Installing [${p.name}] via Windows Package Manager (ID: ${wingetId})..."
-    $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
-    $wingetExe = if ($wingetCmd) { "winget" } else {
-        $localWinget = "$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\winget.exe"
-        if (Test-Path $localWinget) { $localWinget } else { "winget" }
+    # Resolve real winget binary across user desktop, WinRM, and Session 0 (NT AUTHORITY\SYSTEM)
+    $resolvedWinget = (Resolve-Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_*__8wekyb3d8bbwe\winget.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1).Path
+    $wingetExe = if ($resolvedWinget -and (Test-Path $resolvedWinget)) {
+        $resolvedWinget
+    } else {
+        $localWinget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+        if (Test-Path $localWinget) { $localWinget } else {
+            $cmd = Get-Command winget -ErrorAction SilentlyContinue
+            if ($cmd) { $cmd.Source } else { "winget.exe" }
+        }
     }
-    $args = "install --id \`"${wingetId}\`" --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity${wingetExtra}".Trim()
+    $args = "install --id \`"${wingetId}\`" --exact --silent --scope machine --accept-package-agreements --accept-source-agreements --disable-interactivity${wingetExtra}".Trim()
     Write-QuickLog "Executing: $wingetExe $args"
     $proc = Start-Process -FilePath $wingetExe -ArgumentList $args -Wait -PassThru -NoNewWindow
     if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
         Write-QuickLog "[SUCCESS] ${p.name} installed successfully (ExitCode: $($proc.ExitCode))." "SUCCESS"
         $SuccessCount++
+    } elseif ($proc.ExitCode -eq -196608) {
+        Write-QuickLog "[ERROR] ${p.name} failed with ExitCode -196608 (0xFFFD0000: Windows AppX Alias Trampoline blocked in Session 0 / SYSTEM context)." "ERROR"
+        $FailCount++
     } else {
         Write-QuickLog "[WARN] ${p.name} returned code $($proc.ExitCode)." "WARN"
         $FailCount++
@@ -5737,15 +5754,20 @@ ${targetPackages
 # Source: Windows Package Manager (Winget ID: ${wingetId})
 # ------------------------------------------------------------------------------
 try {
-    Write-DeployLog "Checking Windows Package Manager (winget) availability for ${p.name}..."
-    $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
-    $wingetExe = if ($wingetCmd) { "winget" } else {
-        $localWinget = "$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\winget.exe"
-        if (Test-Path $localWinget) { $localWinget } else { "winget" }
+    # Resolve real winget binary across user desktop, WinRM, and Session 0 (NT AUTHORITY\SYSTEM)
+    $resolvedWinget = (Resolve-Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_*__8wekyb3d8bbwe\winget.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1).Path
+    $wingetExe = if ($resolvedWinget -and (Test-Path $resolvedWinget)) {
+        $resolvedWinget
+    } else {
+        $localWinget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+        if (Test-Path $localWinget) { $localWinget } else {
+            $cmd = Get-Command winget -ErrorAction SilentlyContinue
+            if ($cmd) { $cmd.Source } else { "winget.exe" }
+        }
     }
 
     Write-DeployLog "Installing ${p.name} via winget (ID: ${wingetId})..."
-    $wingetArgs = "install --id \`"${wingetId}\`" --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity${wingetExtra}".Trim()
+    $wingetArgs = "install --id \`"${wingetId}\`" --exact --silent --scope machine --accept-package-agreements --accept-source-agreements --disable-interactivity${wingetExtra}".Trim()
     Write-DeployLog "Executing: $wingetExe $wingetArgs"
 
     $proc = Start-Process -FilePath $wingetExe -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
@@ -5753,6 +5775,8 @@ try {
     $validExitCodes = @(${(p.successExitCodes || [0, 3010]).join(',')})
     if ($validExitCodes -contains $proc.ExitCode) {
         Write-DeployLog "Successfully installed ${p.name} via winget (ExitCode: $($proc.ExitCode))" "SUCCESS"
+    } elseif ($proc.ExitCode -eq -196608) {
+        Write-DeployLog "Winget installation of ${p.name} failed with ExitCode -196608 (0xFFFD0000: Windows AppX Alias Trampoline blocked in Session 0 / SYSTEM context)." "ERROR"
     } else {
         Write-DeployLog "Winget installation of ${p.name} finished with ExitCode: $($proc.ExitCode)" "WARN"
     }
