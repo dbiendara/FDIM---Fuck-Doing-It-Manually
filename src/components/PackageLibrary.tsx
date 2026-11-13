@@ -62,6 +62,7 @@ export const PackageLibrary: React.FC<PackageLibraryProps> = ({
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingPkgId, setEditingPkgId] = useState<string | null>(null);
   const [sandboxPkg, setSandboxPkg] = useState<SoftwarePackage | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Source Type: UNC share or Winget
   const [sourceType, setSourceType] = useState<'unc' | 'winget'>('unc');
@@ -104,6 +105,7 @@ export const PackageLibrary: React.FC<PackageLibraryProps> = ({
 
   // Open creation form with fresh defaults
   const openCreateForm = () => {
+    setFormError(null);
     setEditingPkgId(null);
     setSourceType('unc');
     setWingetId('');
@@ -133,6 +135,7 @@ export const PackageLibrary: React.FC<PackageLibraryProps> = ({
 
   // Open edit form with existing package data
   const openEditForm = (pkg: SoftwarePackage) => {
+    setFormError(null);
     setEditingPkgId(pkg.id);
     const isWinget = pkg.sourceType === 'winget' || pkg.installerType === 'Winget' || Boolean(pkg.wingetId);
     setSourceType(isWinget ? 'winget' : 'unc');
@@ -310,15 +313,19 @@ export const PackageLibrary: React.FC<PackageLibraryProps> = ({
 
   const handleSaveForm = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    setFormError(null);
+    if (!name.trim()) {
+      setFormError('Please provide a software package name.');
+      return;
+    }
 
     if (sourceType === 'winget' && !wingetId.trim()) {
-      alert('Please provide a valid Winget Package ID (e.g. 7zip.7zip, VideoLAN.VLC)');
+      setFormError('Please provide a valid Winget Package ID (e.g. 7zip.7zip, VideoLAN.VLC).');
       return;
     }
 
     if (sourceType === 'unc' && !fileName.trim()) {
-      alert('Please provide the installer file name for UNC deployment.');
+      setFormError('Please provide the installer file name for UNC deployment.');
       return;
     }
 
@@ -596,6 +603,18 @@ export const PackageLibrary: React.FC<PackageLibraryProps> = ({
           </div>
 
           <form onSubmit={handleSaveForm} className="space-y-4">
+            {formError && (
+              <div className="p-3 rounded-lg bg-red-950/80 border border-red-800 text-red-200 text-xs flex items-center justify-between">
+                <span>{formError}</span>
+                <button
+                  type="button"
+                  onClick={() => setFormError(null)}
+                  className="text-red-400 hover:text-white ml-2 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
             {/* Row 1: Basic Info */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
               <div>

@@ -58,6 +58,7 @@ interface LiveRunnerProps {
   stagedDrives?: NetworkDriveMapping[];
   stagedPrinters?: PrinterMapping[];
   userLogonStaging?: UserLogonStagingConfig;
+  uncCredentials?: { username?: string; password?: string };
   onCompleteDeployment: (record: DeploymentRecord) => void;
   onOpenAuditModal: () => void;
   showProfanity?: boolean;
@@ -87,6 +88,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
   stagedDrives = [],
   stagedPrinters = [],
   userLogonStaging = { enabled: true },
+  uncCredentials,
   onCompleteDeployment,
   onOpenAuditModal,
   showProfanity = true,
@@ -126,10 +128,14 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
 
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const hasReportedCompletionRef = useRef(false);
+  const selectedPackageIdsKey = selectedPackages.map((p) => p.id).join(',');
 
   // 1. Initialize Live Session on Backend
   const initLiveSession = async () => {
     setIsInitializing(true);
+    setIsFinished(false);
+    hasReportedCompletionRef.current = false;
     try {
       const res = await fetch('/api/deployments/live-session', {
         method: 'POST',
@@ -141,6 +147,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
           selectedPackageIds: selectedPackages.map((p) => p.id),
           packageCustomSwitches,
           packageConfigFiles,
+          uncCredentials,
           systemConfig,
           enabledSwitchIds,
           switchParameters,
@@ -211,7 +218,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
 
   useEffect(() => {
     initLiveSession();
-  }, [machineName, customer.id, selectedPackages]);
+  }, [machineName, customer.id, selectedPackageIdsKey]);
 
   // 2. Poll Live Session Status from Backend
   useEffect(() => {
@@ -235,37 +242,39 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
             setIsDeploying(false);
             if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
-            // Construct final record
-            const record: DeploymentRecord = {
-              id: `dep-${Date.now().toString(36)}`,
-              machineName: s.machineName || machineName || '$env:COMPUTERNAME',
-              domainName: customer.domainName,
-              customerProfileId: customer.id,
-              customerCompanyName: customer.companyName,
-              deploymentType: 'QuickSoftwareInstall',
-              status: s.status === 'completed' ? 'Completed' : 'Failed',
-              startedAt: s.startedAt || new Date().toISOString(),
-              completedAt: s.completedAt || new Date().toISOString(),
-              selectedPackageIds: selectedPackages.map((p) => p.id),
-              appliedSwitchIds: enabledSwitchIds,
-              switchParameters,
-              systemConfig,
-              stagedDrives,
-              stagedPrinters,
-              userLogonStaging,
-              technicianName: 'Admin (FDIM Live Runner)',
-              logs: s.logs || logs,
-              results: {
-                packages: Object.fromEntries(
-                  selectedPackages.map((p) => [
-                    p.id,
-                    { status: s.status === 'completed' ? 'success' : 'failed', exitCode: s.exitCode ?? 0 },
-                  ])
-                ),
-                systemConfigs: Object.fromEntries(enabledSwitchIds.map((swId) => [swId, { status: 'success' }])),
-              },
-            };
-            onCompleteDeployment(record);
+            if (!hasReportedCompletionRef.current) {
+              hasReportedCompletionRef.current = true;
+              const record: DeploymentRecord = {
+                id: `dep-${Date.now().toString(36)}`,
+                machineName: s.machineName || machineName || '$env:COMPUTERNAME',
+                domainName: customer.domainName,
+                customerProfileId: customer.id,
+                customerCompanyName: customer.companyName,
+                deploymentType: 'QuickSoftwareInstall',
+                status: s.status === 'completed' ? 'Completed' : 'Failed',
+                startedAt: s.startedAt || new Date().toISOString(),
+                completedAt: s.completedAt || new Date().toISOString(),
+                selectedPackageIds: selectedPackages.map((p) => p.id),
+                appliedSwitchIds: enabledSwitchIds,
+                switchParameters,
+                systemConfig,
+                stagedDrives,
+                stagedPrinters,
+                userLogonStaging,
+                technicianName: 'Admin (FDIM Live Runner)',
+                logs: s.logs || logs,
+                results: {
+                  packages: Object.fromEntries(
+                    selectedPackages.map((p) => [
+                      p.id,
+                      { status: s.status === 'completed' ? 'success' : 'failed', exitCode: s.exitCode ?? 0 },
+                    ])
+                  ),
+                  systemConfigs: Object.fromEntries(enabledSwitchIds.map((swId) => [swId, { status: 'success' }])),
+                },
+              };
+              onCompleteDeployment(record);
+            }
           }
         }
       } catch (err) {
@@ -277,7 +286,7 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
-  }, [sessionId, isFinished, customer, machineName, selectedPackages, enabledSwitchIds, switchParameters, systemConfig, stagedDrives, stagedPrinters, userLogonStaging, onCompleteDeployment]);
+  }, [sessionId, isFinished, customer, machineName, selectedPackageIdsKey, enabledSwitchIds, switchParameters, systemConfig, stagedDrives, stagedPrinters, userLogonStaging, onCompleteDeployment]);
 
   // Elapsed timer when actively running
   useEffect(() => {

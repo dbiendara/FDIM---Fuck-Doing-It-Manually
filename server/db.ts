@@ -191,6 +191,59 @@ try {
 // SEEDING DEFAULT DATA (if empty)
 // -------------------------------------------------------------
 
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  initialSetupCompleted: false,
+  defaultGlobalDomain: 'corp.local',
+  authMode: 'local',
+  adLdapConfig: {
+    ldapUrl: '',
+    domain: '',
+    baseDn: '',
+    bindDn: '',
+    bindPassword: '',
+    userSearchFilter: '(sAMAccountName={username})',
+    adminGroup: 'Domain Admins',
+    computerSearchOu: '',
+  },
+  keycloakConfig: {
+    serverUrl: '',
+    realm: 'enterprise',
+    clientId: 'fdim-suite',
+    clientSecret: '',
+    redirectUri: '',
+  },
+  runnerServiceAccount: {
+    enabled: false,
+    username: 'Administrator',
+    domain: '',
+    description: 'Dedicated elevated service account for Helpdesk delegated package deployment without local admin rights',
+    delegatedHelpdeskAllowed: true,
+  },
+  proxmoxConfig: {
+    enabled: false,
+    apiUrl: '',
+    node: 'pve-node1',
+    vmTemplateId: 9000,
+    cleanSnapshotName: 'clean-baseline',
+    autoRollback: true,
+  },
+  agentConfig: {
+    heartbeatIntervalMinutes: 30,
+    bootDelayMinutes: 5,
+    serverUrl: '',
+    encryptionMode: 'token-bearer',
+    preSharedKey: 'fdim_sec_a7f92e41c88d30e15b6782fa901c34ef',
+    enforceHttps: false,
+  },
+  corporateColors: {
+    primaryColor: '#06b6d4',
+    secondaryColor: '#2563eb',
+    companyBrandName: 'FDIM Suite',
+    themeMode: 'dark-cyan',
+    customCssVarEnabled: true,
+  },
+};
+
 export function seedInitialDataIfEmpty(
   initialPackages: SoftwarePackage[],
   initialCustomers: CustomerProfile[],
@@ -221,56 +274,7 @@ export function seedInitialDataIfEmpty(
     insertSwitch.run(sw.id, JSON.stringify(sw), new Date().toISOString());
   }
 
-  // Initial App Settings (use RFC-safe .local default so public wildcard DNS never hijacks internal hostnames)
-  const defaultSettings: AppSettings = {
-    defaultGlobalDomain: 'corp.local',
-    authMode: 'local',
-    adLdapConfig: {
-      ldapUrl: '',
-      domain: '',
-      baseDn: '',
-      bindDn: '',
-      userSearchFilter: '(sAMAccountName={username})',
-      adminGroup: 'Domain Admins',
-    },
-    keycloakConfig: {
-      serverUrl: '',
-      realm: 'enterprise',
-      clientId: 'fdim-suite',
-      clientSecret: '',
-      redirectUri: '',
-    },
-    runnerServiceAccount: {
-      enabled: false,
-      username: 'Administrator',
-      domain: '',
-      description: 'Dedicated elevated service account for Helpdesk delegated package deployment without local admin rights',
-      delegatedHelpdeskAllowed: true,
-    },
-    proxmoxConfig: {
-      enabled: false,
-      apiUrl: '',
-      node: 'pve-node1',
-      vmTemplateId: 9000,
-      cleanSnapshotName: 'clean-baseline',
-      autoRollback: true,
-    },
-    agentConfig: {
-      heartbeatIntervalMinutes: 30,
-      bootDelayMinutes: 5,
-      serverUrl: '',
-      encryptionMode: 'token-bearer',
-      preSharedKey: 'fdim_sec_a7f92e41c88d30e15b6782fa901c34ef',
-      enforceHttps: false,
-    },
-    corporateColors: {
-      primaryColor: '#06b6d4',
-      secondaryColor: '#2563eb',
-      companyBrandName: 'FDIM Suite',
-      themeMode: 'dark-cyan',
-      customCssVarEnabled: true,
-    },
-  };
+  const defaultSettings = DEFAULT_APP_SETTINGS;
 
   // Migration: Upgrade legacy pkg-winget-outlook-classic to ODT UNC package if present
   const legacyOutlook = db.prepare('SELECT data FROM packages WHERE id = ?').get('pkg-winget-outlook-classic') as { data: string } | undefined;
@@ -418,6 +422,23 @@ export function saveSystemSwitch(sw: SystemConfigSwitch): SystemConfigSwitch {
   return sw;
 }
 
+export function deleteSystemSwitch(id: string): { deleted: boolean; reason?: string } {
+  const row = db.prepare('SELECT data FROM system_switches WHERE id = ?').get(id) as { data: string } | undefined;
+  if (!row) {
+    return { deleted: false, reason: 'System switch not found' };
+  }
+  try {
+    const parsed = JSON.parse(row.data) as SystemConfigSwitch;
+    if (parsed.isRemovable === false) {
+      return { deleted: false, reason: 'Built-in system switches cannot be deleted' };
+    }
+  } catch {
+    // Allow deleting malformed rows
+  }
+  const result = db.prepare('DELETE FROM system_switches WHERE id = ?').run(id);
+  return { deleted: result.changes > 0 };
+}
+
 // Deployments
 export function getAllDeployments(): DeploymentRecord[] {
   const rows = db.prepare('SELECT data FROM deployments ORDER BY started_at DESC').all() as Array<{ data: string }>;
@@ -455,73 +476,33 @@ export function saveDeployment(dep: DeploymentRecord): DeploymentRecord {
 // App Settings
 export function getAppSettings(): AppSettings {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('global') as { value: string } | undefined;
-  const defaultSettings: AppSettings = {
-    initialSetupCompleted: false,
-    defaultGlobalDomain: 'corp.internal.net',
-    authMode: 'local',
-    adLdapConfig: {
-      ldapUrl: 'ldaps://dc01.corp.internal.net:636',
-      domain: 'CORP',
-      baseDn: 'DC=corp,DC=internal,DC=net',
-      bindDn: 'CN=svc_fdim,OU=ServiceAccounts,DC=corp,DC=internal,DC=net',
-      bindPassword: '',
-      userSearchFilter: '(sAMAccountName={username})',
-      adminGroup: 'FDIM-Admins',
-      computerSearchOu: 'OU=Workstations,DC=corp,DC=internal,DC=net',
-    },
-    keycloakConfig: {
-      serverUrl: 'https://keycloak.corp.internal.net',
-      realm: 'enterprise',
-      clientId: 'fdim-suite',
-      clientSecret: '',
-      redirectUri: 'https://fdim.corp.internal.net/oauth/callback',
-    },
-    runnerServiceAccount: {
-      enabled: true,
-      username: 'CORP\\svc_fdim_runner',
-      domain: 'CORP',
-      description: 'Dedicated elevated service account for Helpdesk delegated package deployment without local admin rights',
-      delegatedHelpdeskAllowed: true,
-    },
-    proxmoxConfig: {
-      enabled: true,
-      apiUrl: 'https://pve01.corp.internal:8006/api2/json',
-      node: 'pve-node1',
-      vmTemplateId: 9000,
-      cleanSnapshotName: 'clean-baseline',
-      autoRollback: true,
-    },
-    agentConfig: {
-      heartbeatIntervalMinutes: 30,
-      bootDelayMinutes: 5,
-      serverUrl: 'http://fdim.corp.internal:3000',
-      encryptionMode: 'token-bearer',
-      preSharedKey: 'fdim_sec_a7f92e41c88d30e15b6782fa901c34ef',
-      enforceHttps: false,
-    },
-    corporateColors: {
-      primaryColor: '#06b6d4',
-      secondaryColor: '#2563eb',
-      companyBrandName: 'FDIM Suite',
-      themeMode: 'dark-cyan',
-      customCssVarEnabled: true,
-    },
-  };
-
   if (!row) {
-    return defaultSettings;
+    return {
+      ...DEFAULT_APP_SETTINGS,
+      adLdapConfig: { ...DEFAULT_APP_SETTINGS.adLdapConfig },
+      keycloakConfig: { ...DEFAULT_APP_SETTINGS.keycloakConfig },
+      runnerServiceAccount: { ...DEFAULT_APP_SETTINGS.runnerServiceAccount },
+      proxmoxConfig: { ...DEFAULT_APP_SETTINGS.proxmoxConfig },
+      agentConfig: { ...DEFAULT_APP_SETTINGS.agentConfig },
+      corporateColors: { ...DEFAULT_APP_SETTINGS.corporateColors },
+    };
   }
 
-  const parsed = JSON.parse(row.value);
+  let parsed: Partial<AppSettings> = {};
+  try {
+    parsed = JSON.parse(row.value) || {};
+  } catch {
+    parsed = {};
+  }
   return {
-    ...defaultSettings,
+    ...DEFAULT_APP_SETTINGS,
     ...parsed,
-    adLdapConfig: { ...defaultSettings.adLdapConfig, ...(parsed.adLdapConfig || {}) },
-    keycloakConfig: { ...defaultSettings.keycloakConfig, ...(parsed.keycloakConfig || {}) },
-    runnerServiceAccount: { ...defaultSettings.runnerServiceAccount, ...(parsed.runnerServiceAccount || {}) },
-    proxmoxConfig: { ...defaultSettings.proxmoxConfig, ...(parsed.proxmoxConfig || {}) },
-    agentConfig: { ...defaultSettings.agentConfig, ...(parsed.agentConfig || {}) },
-    corporateColors: { ...defaultSettings.corporateColors, ...(parsed.corporateColors || {}) },
+    adLdapConfig: { ...DEFAULT_APP_SETTINGS.adLdapConfig, ...(parsed.adLdapConfig || {}) },
+    keycloakConfig: { ...DEFAULT_APP_SETTINGS.keycloakConfig, ...(parsed.keycloakConfig || {}) },
+    runnerServiceAccount: { ...DEFAULT_APP_SETTINGS.runnerServiceAccount, ...(parsed.runnerServiceAccount || {}) },
+    proxmoxConfig: { ...DEFAULT_APP_SETTINGS.proxmoxConfig, ...(parsed.proxmoxConfig || {}) },
+    agentConfig: { ...DEFAULT_APP_SETTINGS.agentConfig, ...(parsed.agentConfig || {}) },
+    corporateColors: { ...DEFAULT_APP_SETTINGS.corporateColors, ...(parsed.corporateColors || {}) },
   };
 }
 

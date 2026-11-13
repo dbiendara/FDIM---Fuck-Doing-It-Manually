@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   SoftwarePackage,
   CustomerProfile,
@@ -33,6 +33,7 @@ import { ClientAgentQueueView } from './components/ClientAgentQueueView';
 import { loadWizardDraft, clearWizardDraft } from './utils/wizardAutoSave';
 import { loadUserProfanityPreference, saveUserProfanityPreference } from './utils/branding';
 import { applyCorporateTheme, loadSavedCorporateColors } from './utils/theme';
+import { DEFAULT_CLIENT_SETTINGS } from './utils/api';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppNavTab>('wizard');
@@ -43,45 +44,7 @@ export default function App() {
   const [snippets, setSnippets] = useState<UserLogonStagingSnippet[]>([]);
 
   // App Settings & Auth User state
-  const [appSettings, setAppSettings] = useState<AppSettings>({
-    defaultGlobalDomain: 'corp.internal.net',
-    authMode: 'local',
-    adLdapConfig: {
-      ldapUrl: 'ldaps://dc01.corp.internal.net:636',
-      domain: 'CORP',
-      baseDn: 'DC=corp,DC=internal,DC=net',
-      bindDn: 'CN=svc_fdim,OU=ServiceAccounts,DC=corp,DC=internal,DC=net',
-      userSearchFilter: '(sAMAccountName={username})',
-      adminGroup: 'FDIM-Admins',
-    },
-    keycloakConfig: {
-      serverUrl: 'https://keycloak.corp.internal.net',
-      realm: 'enterprise',
-      clientId: 'fdim-suite',
-      clientSecret: '',
-      redirectUri: 'https://fdim.corp.internal.net/oauth/callback',
-    },
-    runnerServiceAccount: {
-      enabled: true,
-      username: 'CORP\\svc_fdim_runner',
-      domain: 'CORP',
-      description: 'Dedicated elevated service account for Helpdesk delegated package deployment without local admin rights',
-      delegatedHelpdeskAllowed: true,
-    },
-    proxmoxConfig: {
-      enabled: true,
-      apiUrl: 'https://pve01.corp.internal:8006/api2/json',
-      node: 'pve-node1',
-      vmTemplateId: 9000,
-      cleanSnapshotName: 'clean-baseline',
-      autoRollback: true,
-    },
-    agentConfig: {
-      heartbeatIntervalMinutes: 30,
-      bootDelayMinutes: 5,
-      serverUrl: 'http://fdim.corp.internal:3000',
-    },
-  });
+  const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_CLIENT_SETTINGS);
 
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     // If the user has explicitly logged out, keep them logged out
@@ -153,6 +116,7 @@ export default function App() {
 
   // Runner & Modals
   const [isDeploying, setIsDeploying] = useState(false);
+  const [quickUncCredentials, setQuickUncCredentials] = useState<{ username?: string; password?: string } | undefined>(undefined);
   const [isScriptModalOpen, setIsScriptModalOpen] = useState(false);
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
   const [isSystemConfigManagerOpen, setIsSystemConfigManagerOpen] = useState(false);
@@ -329,126 +293,142 @@ export default function App() {
     }
   }, [activeTab, appSettings]);
 
-  const activeCustomer = customers.find((c) => c.id === selectedCustomerId) || customers[0] || {
-    id: 'default',
-    companyName: 'Corporate Client',
-    customerCode: 'CORP',
-    domainName: 'corp.local',
-    defaultAdAdminGroup: 'CORP\\IT-Admins',
-    uncShareRoot: '\\\\corp-fs01.internal.net\\deployments',
-    enableRdp: true,
-    powerPlanSettings: { screenTimeoutAc: 15, standbyTimeoutAc: 0 },
-    packageIds: [],
-  };
+  const activeCustomer = useMemo<CustomerProfile>(
+    () =>
+      customers.find((c) => c.id === selectedCustomerId) ||
+      customers[0] || {
+        id: 'default',
+        companyName: 'Corporate Client',
+        customerCode: 'CORP',
+        domainName: appSettings.defaultGlobalDomain || 'corp.local',
+        defaultAdAdminGroup: 'CORP\\IT-Admins',
+        uncShareRoot: '\\\\corp-fs01.internal.net\\deployments',
+        enableRdp: true,
+        powerPlanSettings: { screenTimeoutAc: 15, standbyTimeoutAc: 0 },
+        packageIds: [],
+      },
+    [customers, selectedCustomerId, appSettings.defaultGlobalDomain]
+  );
 
   // Handlers for Deployment
   const handleStartDeployment = () => {
+    setQuickUncCredentials(undefined);
     setIsDeploying(true);
     setActiveTab('runner');
   };
 
-  const handleCompleteDeployment = (record: DeploymentRecord) => {
-    fetch('/api/deployments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(record),
-    })
-      .then((r) => r.json())
-      .then((saved) => {
-        setDeployments((prev) => [saved, ...prev]);
-        setActiveAuditRecord(saved);
-      })
-      .catch(() => {
-        setDeployments((prev) => [record, ...prev]);
-        setActiveAuditRecord(record);
+  const handleCompleteDeployment = async (record: DeploymentRecord) => {
+    try {
+      const res = await fetch('/api/deployments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
       });
+      if (!res.ok) throw new Error('Failed to save deployment');
+      const saved = await res.json();
+      setDeployments((prev) => [saved, ...prev]);
+      setActiveAuditRecord(saved);
+    } catch (err) {
+      console.error('Error saving deployment record:', err);
+      setDeployments((prev) => [record, ...prev]);
+      setActiveAuditRecord(record);
+    }
   };
 
   // Handlers for Packages
-  const handleAddPackage = (newPkg: SoftwarePackage) => {
-    fetch('/api/packages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newPkg),
-    })
-      .then((r) => r.json())
-      .then((saved) => {
-        setPackages((prev) => [saved, ...prev]);
-        setSelectedPackageIds((prev) => [...prev, saved.id]);
-        if (saved.extraSwitches) {
-          setPackageCustomSwitches((prev) => ({ ...prev, [saved.id]: saved.extraSwitches! }));
-        }
-      })
-      .catch(() => {
-        setPackages((prev) => [newPkg, ...prev]);
-        setSelectedPackageIds((prev) => [...prev, newPkg.id]);
+  const handleAddPackage = async (newPkg: SoftwarePackage) => {
+    try {
+      const res = await fetch('/api/packages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newPkg),
       });
+      if (!res.ok) throw new Error('Failed to add package');
+      const saved = await res.json();
+      setPackages((prev) => [saved, ...prev]);
+      setSelectedPackageIds((prev) => [...prev, saved.id]);
+      if (saved.extraSwitches) {
+        setPackageCustomSwitches((prev) => ({ ...prev, [saved.id]: saved.extraSwitches! }));
+      }
+    } catch (err) {
+      console.error('Error adding package:', err);
+    }
   };
 
-  const handleDeletePackage = (id: string) => {
-    fetch(`/api/packages/${id}`, { method: 'DELETE' }).catch((err) => console.error(err));
-    setPackages((prev) => prev.filter((p) => p.id !== id));
-    setSelectedPackageIds((prev) => prev.filter((pId) => pId !== id));
+  const handleDeletePackage = async (id: string) => {
+    try {
+      const res = await fetch(`/api/packages/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete package');
+      setPackages((prev) => prev.filter((p) => p.id !== id));
+      setSelectedPackageIds((prev) => prev.filter((pId) => pId !== id));
+    } catch (err) {
+      console.error('Error deleting package:', err);
+    }
   };
 
-  const handleUpdatePackage = (updated: SoftwarePackage) => {
-    fetch(`/api/packages/${updated.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updated),
-    })
-      .then((r) => r.json())
-      .then((saved) => {
-        setPackages((prev) => prev.map((p) => (p.id === saved.id ? saved : p)));
-        if (saved.extraSwitches) {
-          setPackageCustomSwitches((prev) => ({ ...prev, [saved.id]: saved.extraSwitches! }));
-        }
-      })
-      .catch(() => {
-        setPackages((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+  const handleUpdatePackage = async (updated: SoftwarePackage) => {
+    try {
+      const res = await fetch(`/api/packages/${updated.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated),
       });
+      if (!res.ok) throw new Error('Failed to update package');
+      const saved = await res.json();
+      setPackages((prev) => prev.map((p) => (p.id === saved.id ? saved : p)));
+      if (saved.extraSwitches) {
+        setPackageCustomSwitches((prev) => ({ ...prev, [saved.id]: saved.extraSwitches! }));
+      }
+    } catch (err) {
+      console.error('Error updating package:', err);
+    }
   };
 
   // Handlers for Customer Profiles
-  const handleAddCustomer = (newProfile: CustomerProfile) => {
-    fetch('/api/profiles', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newProfile),
-    })
-      .then((r) => r.json())
-      .then((saved) => {
-        setCustomers((prev) => [...prev, saved]);
-      })
-      .catch(() => {
-        setCustomers((prev) => [...prev, newProfile]);
+  const handleAddCustomer = async (newProfile: CustomerProfile) => {
+    try {
+      const res = await fetch('/api/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newProfile),
       });
+      if (!res.ok) throw new Error('Failed to create customer profile');
+      const saved = await res.json();
+      setCustomers((prev) => [...prev, saved]);
+    } catch (err) {
+      console.error('Error adding customer profile:', err);
+    }
   };
 
-  const handleUpdateCustomer = (updated: CustomerProfile) => {
-    fetch(`/api/profiles/${updated.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updated),
-    })
-      .then((r) => r.json())
-      .then((saved) => {
-        setCustomers((prev) => prev.map((c) => (c.id === saved.id ? saved : c)));
-      })
-      .catch(() => {
-        setCustomers((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+  const handleUpdateCustomer = async (updated: CustomerProfile) => {
+    try {
+      const res = await fetch(`/api/profiles/${updated.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated),
       });
+      if (!res.ok) throw new Error('Failed to update customer profile');
+      const saved = await res.json();
+      setCustomers((prev) => prev.map((c) => (c.id === saved.id ? saved : c)));
+    } catch (err) {
+      console.error('Error updating customer profile:', err);
+    }
   };
 
-  const handleDeleteCustomer = (id: string) => {
-    fetch(`/api/profiles/${id}`, { method: 'DELETE' }).catch((err) => console.error(err));
-    setCustomers((prev) => {
-      const remaining = prev.filter((c) => c.id !== id);
-      if (selectedCustomerId === id && remaining.length > 0) {
-        handleSelectCustomerForSetup(remaining[0].id);
-      }
-      return remaining;
-    });
+  const handleDeleteCustomer = async (id: string) => {
+    try {
+      const res = await fetch(`/api/profiles/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete customer profile');
+      setCustomers((prev) => {
+        const remaining = prev.filter((c) => c.id !== id);
+        if (selectedCustomerId === id && remaining.length > 0) {
+          handleSelectCustomerForSetup(remaining[0].id);
+        }
+        return remaining;
+      });
+    } catch (err) {
+      console.error('Error deleting customer profile:', err);
+    }
   };
 
   const handleSelectCustomerForSetup = (customerId: string) => {
@@ -489,45 +469,53 @@ export default function App() {
   };
 
   // Handlers for System Configuration Switches
-  const handleAddSwitch = (newSwitch: SystemConfigSwitch) => {
-    fetch('/api/system-switches', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newSwitch),
-    })
-      .then((r) => r.json())
-      .then((saved) => {
-        setSystemSwitches((prev) => [...prev, saved]);
-        setEnabledSwitchIds((prev) => [...prev, saved.id]);
-        if (saved.parameterKey && saved.parameterDefaultValue !== undefined) {
-          setSwitchParameters((prev) => ({ ...prev, [saved.parameterKey!]: saved.parameterDefaultValue! }));
-        }
-      })
-      .catch(() => {
-        setSystemSwitches((prev) => [...prev, newSwitch]);
-        setEnabledSwitchIds((prev) => [...prev, newSwitch.id]);
+  const handleAddSwitch = async (newSwitch: SystemConfigSwitch) => {
+    try {
+      const res = await fetch('/api/system-switches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSwitch),
       });
+      if (!res.ok) throw new Error('Failed to add switch');
+      const saved = await res.json();
+      setSystemSwitches((prev) => [...prev, saved]);
+      setEnabledSwitchIds((prev) => [...prev, saved.id]);
+      if (saved.parameterKey && saved.parameterDefaultValue !== undefined) {
+        setSwitchParameters((prev) => ({ ...prev, [saved.parameterKey!]: saved.parameterDefaultValue! }));
+      }
+    } catch (err) {
+      console.error('Error adding system switch:', err);
+    }
   };
 
-  const handleUpdateSwitch = (updatedSwitch: SystemConfigSwitch) => {
-    fetch(`/api/system-switches/${updatedSwitch.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedSwitch),
-    })
-      .then((r) => r.json())
-      .then((saved) => {
-        setSystemSwitches((prev) => prev.map((s) => (s.id === saved.id ? saved : s)));
-      })
-      .catch(() => {
-        setSystemSwitches((prev) => prev.map((s) => (s.id === updatedSwitch.id ? updatedSwitch : s)));
+  const handleUpdateSwitch = async (updatedSwitch: SystemConfigSwitch) => {
+    try {
+      const res = await fetch(`/api/system-switches/${updatedSwitch.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedSwitch),
       });
+      if (!res.ok) throw new Error('Failed to update switch');
+      const saved = await res.json();
+      setSystemSwitches((prev) => prev.map((s) => (s.id === saved.id ? saved : s)));
+    } catch (err) {
+      console.error('Error updating system switch:', err);
+    }
   };
 
-  const handleDeleteSwitch = (id: string) => {
-    fetch(`/api/system-switches/${id}`, { method: 'DELETE' }).catch((err) => console.error(err));
-    setSystemSwitches((prev) => prev.filter((s) => s.id !== id));
-    setEnabledSwitchIds((prev) => prev.filter((sId) => sId !== id));
+  const handleDeleteSwitch = async (id: string) => {
+    try {
+      const res = await fetch(`/api/system-switches/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        console.warn('Could not delete system switch:', errData.error || res.statusText);
+        return;
+      }
+      setSystemSwitches((prev) => prev.filter((s) => s.id !== id));
+      setEnabledSwitchIds((prev) => prev.filter((sId) => sId !== id));
+    } catch (err) {
+      console.error('Error deleting system switch:', err);
+    }
   };
 
   const handleRunQuickDeployment = (config: {
@@ -546,6 +534,7 @@ export default function App() {
       if (ov.extraSwitches) customSwitches[pkgId] = ov.extraSwitches;
     });
     setPackageCustomSwitches(customSwitches);
+    setQuickUncCredentials(config.uncCredentials);
     // Non-disruptive mode: omit power settings and admin group modifications
     setSystemConfig((prev) => ({
       ...prev,
@@ -558,39 +547,44 @@ export default function App() {
   };
 
   // Handlers for First-Run Snippets Library
-  const handleAddSnippet = (newSnippet: UserLogonStagingSnippet) => {
-    fetch('/api/snippets', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newSnippet),
-    })
-      .then((r) => r.json())
-      .then((saved) => {
-        setSnippets((prev) => [saved, ...prev.filter((s) => s.id !== saved.id)]);
-      })
-      .catch(() => {
-        setSnippets((prev) => [newSnippet, ...prev]);
+  const handleAddSnippet = async (newSnippet: UserLogonStagingSnippet) => {
+    try {
+      const res = await fetch('/api/snippets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSnippet),
       });
+      if (!res.ok) throw new Error('Failed to create snippet');
+      const saved = await res.json();
+      setSnippets((prev) => [saved, ...prev.filter((s) => s.id !== saved.id)]);
+    } catch (err) {
+      console.error('Error adding snippet:', err);
+    }
   };
 
-  const handleUpdateSnippet = (updatedSnippet: UserLogonStagingSnippet) => {
-    fetch(`/api/snippets/${updatedSnippet.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedSnippet),
-    })
-      .then((r) => r.json())
-      .then((saved) => {
-        setSnippets((prev) => prev.map((s) => (s.id === saved.id ? saved : s)));
-      })
-      .catch(() => {
-        setSnippets((prev) => prev.map((s) => (s.id === updatedSnippet.id ? updatedSnippet : s)));
+  const handleUpdateSnippet = async (updatedSnippet: UserLogonStagingSnippet) => {
+    try {
+      const res = await fetch(`/api/snippets/${updatedSnippet.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedSnippet),
       });
+      if (!res.ok) throw new Error('Failed to update snippet');
+      const saved = await res.json();
+      setSnippets((prev) => prev.map((s) => (s.id === saved.id ? saved : s)));
+    } catch (err) {
+      console.error('Error updating snippet:', err);
+    }
   };
 
-  const handleDeleteSnippet = (id: string) => {
-    fetch(`/api/snippets/${id}`, { method: 'DELETE' }).catch((err) => console.error(err));
-    setSnippets((prev) => prev.filter((s) => s.id !== id));
+  const handleDeleteSnippet = async (id: string) => {
+    try {
+      const res = await fetch(`/api/snippets/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete snippet');
+      setSnippets((prev) => prev.filter((s) => s.id !== id));
+    } catch (err) {
+      console.error('Error deleting snippet:', err);
+    }
   };
 
   const handleResetDefaultSnippets = () => {
@@ -607,7 +601,10 @@ export default function App() {
     setIsAuditModalOpen(true);
   };
 
-  const selectedPackages = packages.filter((p) => selectedPackageIds.includes(p.id));
+  const selectedPackages = useMemo(
+    () => packages.filter((p) => selectedPackageIds.includes(p.id)),
+    [packages, selectedPackageIds]
+  );
 
   // If not authenticated, present the professional Login Screen
   if (!currentUser) {
@@ -744,6 +741,7 @@ export default function App() {
             stagedDrives={stagedDrives}
             stagedPrinters={stagedPrinters}
             userLogonStaging={userLogonStaging}
+            uncCredentials={quickUncCredentials}
             onCompleteDeployment={handleCompleteDeployment}
             onOpenAuditModal={() => setIsAuditModalOpen(true)}
             showProfanity={currentUser.showProfanity !== false}
