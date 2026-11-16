@@ -197,20 +197,39 @@ export const LiveRunner: React.FC<LiveRunnerProps> = ({
         headers: { 'Content-Type': 'application/json' },
       });
       const data = await res.json();
-      if (data.success) {
-        setTaskQueuedMessage(data.message || `Task successfully added to Agent Queue for ${machineName}!`);
+      if (res.ok && data.success) {
+        setTaskQueuedMessage(
+          data.message || `Task successfully added to Client Agent Queue for ${machineName}!`
+        );
         setLogs((prev) => [
           ...prev,
           {
             timestamp: new Date().toLocaleTimeString(),
             level: 'info',
-            message: `[MANUAL ACTION] Computer marked offline/unavailable. Deployment task scheduled in Agent Queue (${data.task?.id || 'ID pending'}).`,
+            message: `[CLIENT AGENT QUEUE] Deployment task scheduled for ${machineName} Client Agent (${data.task?.id || 'ID pending'}). Will not be claimed by Central Server Runner.`,
           },
         ]);
         setTimeout(() => setTaskQueuedMessage(null), 8000);
+      } else {
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            level: 'error',
+            message: `[QUEUE ERROR] Failed to queue task for Client Agent: ${data?.error || 'Server error'}`,
+          },
+        ]);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error queuing task for offline computer:', err);
+      setLogs((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString(),
+          level: 'error',
+          message: `[QUEUE ERROR] Failed to queue task for Client Agent: ${err?.message || err}`,
+        },
+      ]);
     } finally {
       setIsQueueingTask(false);
     }

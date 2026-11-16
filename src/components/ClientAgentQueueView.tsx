@@ -809,7 +809,9 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
                               </span>
                             )}
                             <span className="text-[10px] text-slate-500 block mt-0.5">
-                              Delegated Service Exec
+                              {task.executionMode === 'agent_system'
+                                ? 'Client Agent (Heartbeat / Wait-Task)'
+                                : 'Central Server Runner (WinRM)'}
                             </span>
                           </td>
 

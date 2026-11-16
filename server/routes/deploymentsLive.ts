@@ -233,6 +233,12 @@ deploymentsLiveRouter.post('/deployments/live/:sessionId/queue-task', (req, res)
       configFiles: session.packageConfigFiles,
       switchIds: session.enabledSwitchIds,
       switchParameters: session.switchParameters,
+      deploymentType: session.deploymentType,
+      systemConfig: session.systemConfig,
+      stagedDrives: session.stagedDrives,
+      stagedPrinters: session.stagedPrinters,
+      userLogonStaging: session.userLogonStaging,
+      uncCredentials: session.uncCredentials,
       command: session.runCommand,
     },
     executionMode: 'agent_system',
@@ -247,12 +253,12 @@ deploymentsLiveRouter.post('/deployments/live/:sessionId/queue-task', (req, res)
   session.logs.push({
     timestamp: new Date().toLocaleTimeString(),
     level: 'info',
-    message: `[MANUAL QUEUE] Deployment queued as background task ${queuedTask.id} for machine ${session.machineName} when online.`,
+    message: `[MANUAL QUEUE] Deployment queued for Client Agent as background task ${queuedTask.id} on ${session.machineName} (NT AUTHORITY\\SYSTEM).`,
   });
 
   res.json({
     success: true,
-    message: `Deployment task successfully created for ${session.machineName}. It will execute automatically when the client agent checks in or connects.`,
+    message: `Deployment task queued for the ${session.machineName} Client Agent (NT AUTHORITY\\SYSTEM). It will execute automatically on the workstation's next agent check-in.`,
     task: queuedTask,
   });
 });

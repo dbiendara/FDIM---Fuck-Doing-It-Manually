@@ -738,6 +738,10 @@ foreach ($Target in $Targets) {
             taskType: 'SoftwareDeploy',
             packageIds: selectedPkgs.map((p) => p.id),
             packageNames: selectedPkgs.map((p) => p.name),
+            executionMode:
+              comp.agentInstalled || comp.agentStatus === 'Installed'
+                ? 'agent_system'
+                : 'service_account',
             triggerCondition: comp.status === 'Online' ? 'NextHeartbeat' : 'OnBootOrWake',
             createdBy: 'AD Console Admin',
             notes: `Bulk deployment to ${selectedComputers.length} machines from AD view`,

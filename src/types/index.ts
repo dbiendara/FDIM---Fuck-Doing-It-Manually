@@ -302,6 +302,12 @@ export interface QueuedTask {
     switchParameters?: Record<string, string | number>;
     command?: string;
     customScript?: string;
+    deploymentType?: 'FullStaging' | 'QuickSoftwareInstall';
+    systemConfig?: any;
+    stagedDrives?: any[];
+    stagedPrinters?: any[];
+    userLogonStaging?: any;
+    uncCredentials?: { username?: string; password?: string };
   };
   executionMode: 'agent_system' | 'service_account' | 'interactive';
   serviceAccount?: string;

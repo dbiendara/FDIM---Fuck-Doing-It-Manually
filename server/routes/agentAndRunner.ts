@@ -240,7 +240,9 @@ agentAndRunnerRouter.post('/agent/heartbeat', (req, res) => {
     comp = newComp;
   }
 
-  const pending = getQueuedTasksForMachine(cleanName);
+  const pending = getQueuedTasksForMachine(cleanName).filter(
+    (t) => t.executionMode !== 'service_account'
+  );
   if (pending.length > 0) {
     const nextTask = pending[0];
     updateQueuedTaskStatus(nextTask.id, 'dispatching', `Dispatched to client agent during heartbeat at ${now}`);
@@ -338,11 +340,18 @@ agentAndRunnerRouter.get('/agent/tasks/:id/script', (req, res) => {
     customerProfileId: customer?.id || '',
     customerCompanyName: customer?.companyName || 'Corporate Client',
     uncShareRoot: customer?.uncShareRoot,
-    deploymentType: 'QuickSoftwareInstall',
+    deploymentType: task.payload?.deploymentType || 'QuickSoftwareInstall',
     packageIds: targetPackages.map((p) => p.id),
     packages: targetPackages,
     packageCustomSwitches: task.payload?.customSwitches,
     packageConfigFiles: task.payload?.configFiles,
+    uncCredentials: task.payload?.uncCredentials,
+    systemConfig: task.payload?.systemConfig,
+    enabledSwitchIds: task.payload?.switchIds,
+    switchParameters: task.payload?.switchParameters,
+    stagedDrives: task.payload?.stagedDrives,
+    stagedPrinters: task.payload?.stagedPrinters,
+    userLogonStaging: task.payload?.userLogonStaging,
     executionMode: task.executionMode === 'interactive' ? 'technician' : (task.executionMode || 'agent_system'),
     serviceAccount: task.serviceAccount || 'NT AUTHORITY\\SYSTEM',
     status: 'running',
@@ -436,7 +445,11 @@ agentAndRunnerRouter.post('/server-runner/poll', (req, res) => {
   };
 
   const allTasks = getAllQueuedTasks();
-  const pendingTasks = allTasks.filter((t) => t.status === 'queued' || t.status === 'Queued');
+  const pendingTasks = allTasks.filter(
+    (t) =>
+      (t.status === 'queued' || t.status === 'Queued') &&
+      t.executionMode !== 'agent_system'
+  );
 
   res.json({
     success: true,
@@ -452,6 +465,11 @@ agentAndRunnerRouter.post('/server-runner/tasks/:id/claim', (req, res) => {
   const task = getAllQueuedTasks().find((t) => t.id === req.params.id);
   if (!task) {
     return res.status(404).json({ error: 'Task not found' });
+  }
+  if (task.executionMode === 'agent_system') {
+    return res.status(409).json({
+      error: 'Task is assigned to the workstation Client Agent (executionMode: agent_system) and cannot be claimed by the Central Server Runner.',
+    });
   }
 
   task.status = 'running';
