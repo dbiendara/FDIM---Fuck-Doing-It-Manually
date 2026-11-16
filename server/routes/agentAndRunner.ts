@@ -126,7 +126,35 @@ agentAndRunnerRouter.post('/agent/tasks/:id/retry', (req, res) => {
 
 agentAndRunnerRouter.delete(['/agent/tasks/:id', '/queued-tasks/:id'], (req, res) => {
   const success = deleteQueuedTask(req.params.id);
-  res.json({ success, deletedId: req.params.id });
+  if (!success) {
+    return res.status(404).json({ success: false, error: 'Task not found' });
+  }
+  res.json({ success: true, deletedId: req.params.id });
+});
+
+agentAndRunnerRouter.post(['/agent/tasks/bulk-delete', '/queued-tasks/bulk-delete'], (req, res) => {
+  const { ids, statuses } = req.body || {};
+  const allTasks = getAllQueuedTasks();
+  let deletedCount = 0;
+
+  if (Array.isArray(ids) && ids.length > 0) {
+    for (const id of ids) {
+      if (typeof id === 'string' && deleteQueuedTask(id)) {
+        deletedCount++;
+      }
+    }
+  } else if (Array.isArray(statuses) && statuses.length > 0) {
+    const allowed = new Set(statuses.map((s: any) => String(s).toLowerCase()));
+    for (const t of allTasks) {
+      if (allowed.has(String(t.status).toLowerCase())) {
+        if (deleteQueuedTask(t.id)) {
+          deletedCount++;
+        }
+      }
+    }
+  }
+
+  res.json({ success: true, deletedCount });
 });
 
 agentAndRunnerRouter.post('/agent/heartbeat', (req, res) => {
@@ -607,7 +635,7 @@ agentAndRunnerRouter.get('/agent/live-logs/stream', (req, res) => {
 
 agentAndRunnerRouter.post('/agent/live-logs/simulate', async (req, res) => {
   const { machineName, packageName, installerType, silentArgs } = req.body;
-  const targetMachine = (machineName || 'CSPC03').toUpperCase().trim();
+  const targetMachine = (machineName || 'DEMO-WS-01').toUpperCase().trim();
   const pkgName = packageName || '7-Zip Enterprise 24.08';
   const type = installerType || 'MSI';
   const args = silentArgs || '/qn /norestart';

@@ -2705,9 +2705,39 @@ foreach ($Target in $Targets) {
                                         {task.status}
                                       </span>
                                     </div>
-                                    <span className="text-xs font-mono text-slate-400">
-                                      Created: {dt.fullStr}
-                                    </span>
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-xs font-mono text-slate-400">
+                                        Created: {dt.fullStr}
+                                      </span>
+                                      {['queued', 'waiting', 'dispatching', 'failed', 'cancelled', 'completed'].includes(
+                                        String(task.status || '').toLowerCase()
+                                      ) && (
+                                        <button
+                                          onClick={async () => {
+                                            try {
+                                              const res = await fetch(`/api/agent/tasks/${task.id}`, { method: 'DELETE' });
+                                              if (res.ok) {
+                                                setHistoryData((prev: any) =>
+                                                  prev
+                                                    ? {
+                                                        ...prev,
+                                                        tasks: (prev.tasks || []).filter((t: any) => t.id !== task.id),
+                                                      }
+                                                    : prev
+                                                );
+                                              }
+                                            } catch (err) {
+                                              console.error('Failed to delete task from history:', err);
+                                            }
+                                          }}
+                                          className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-slate-900 hover:bg-red-950 text-slate-400 hover:text-red-300 border border-slate-700 hover:border-red-800/70 text-[10px] font-semibold transition-colors cursor-pointer"
+                                          title="Delete task"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                          <span>Delete</span>
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="text-xs text-slate-300 flex items-center space-x-2">
                                     <span className="text-slate-400">Packages:</span>

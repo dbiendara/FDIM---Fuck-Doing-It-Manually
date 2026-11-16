@@ -66,6 +66,9 @@ export default function App() {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [isSetupWizardOpen, setIsSetupWizardOpen] = useState(false);
   const [setupCompletionNotice, setSetupCompletionNotice] = useState<string | null>(null);
+  const [agentInitialSubTab, setAgentInitialSubTab] = useState<'live-logs' | 'server-runner' | 'queue' | 'agents' | undefined>(
+    undefined
+  );
 
   // Machine state (persisted via local storage draft)
   const initialDraft = loadWizardDraft();
@@ -722,6 +725,7 @@ export default function App() {
           <ClientAgentQueueView
             customers={customers}
             packages={packages}
+            initialSubTab={agentInitialSubTab}
           />
         )}
 
@@ -884,12 +888,22 @@ export default function App() {
           sessionStorage.setItem('fdim_setup_skipped', 'true');
           setIsSetupWizardOpen(false);
         }}
-        onSetupCompleted={(newAdmin, newSettings, discoveredCount, ldapSyncWarning, shouldOpenAdTab) => {
+        onSetupCompleted={(
+          newAdmin,
+          newSettings,
+          discoveredCount,
+          ldapSyncWarning,
+          shouldOpenAdTab,
+          shouldOpenRunnerTab
+        ) => {
           clearWizardDraft();
           setCurrentUser(newAdmin);
           setAppSettings(newSettings);
           setIsSetupWizardOpen(false);
-          if (shouldOpenAdTab) {
+          if (shouldOpenRunnerTab) {
+            setAgentInitialSubTab('server-runner');
+            setActiveTab('agent');
+          } else if (shouldOpenAdTab) {
             setActiveTab('ad-computers');
           }
           const adNotice =

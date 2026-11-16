@@ -130,16 +130,16 @@ export const agentLiveLogs: AgentExecutionLog[] = [
   {
     id: 'log-seed-1',
     taskId: 'system-startup',
-    machineName: 'CSPC03',
+    machineName: 'DEMO-WS-01',
     timestamp: new Date(Date.now() - 360000).toLocaleTimeString('en-GB', { hour12: false }),
     isoTime: new Date(Date.now() - 360000).toISOString(),
     level: 'info',
-    message: 'Client Agent daemon initialized on CSPC03. Scheduled Task running under NT AUTHORITY\\SYSTEM.',
+    message: 'Client Agent daemon initialized on DEMO-WS-01. Scheduled Task running under NT AUTHORITY\\SYSTEM.',
   },
   {
     id: 'log-seed-2',
     taskId: 'system-startup',
-    machineName: 'CSPC03',
+    machineName: 'DEMO-WS-01',
     timestamp: new Date(Date.now() - 355000).toLocaleTimeString('en-GB', { hour12: false }),
     isoTime: new Date(Date.now() - 355000).toISOString(),
     level: 'success',
@@ -148,7 +148,7 @@ export const agentLiveLogs: AgentExecutionLog[] = [
   {
     id: 'log-seed-3',
     taskId: 'system-startup',
-    machineName: 'CSPC03',
+    machineName: 'DEMO-WS-01',
     timestamp: new Date(Date.now() - 350000).toLocaleTimeString('en-GB', { hour12: false }),
     isoTime: new Date(Date.now() - 350000).toISOString(),
     level: 'info',

@@ -22,6 +22,10 @@ import {
   X,
   ExternalLink,
   Lock,
+  Copy,
+  Download,
+  Terminal,
+  Zap,
 } from 'lucide-react';
 import { AppSettings, AuthUser } from '../types';
 import { COLOR_PRESETS, applyCorporateTheme } from '../utils/theme';
@@ -35,7 +39,8 @@ interface SetupWizardModalProps {
     settings: AppSettings,
     discoveredCount?: number,
     ldapSyncWarning?: string,
-    didRequestSync?: boolean
+    didRequestSync?: boolean,
+    shouldOpenRunnerTab?: boolean
   ) => void;
 }
 
@@ -78,9 +83,27 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
   const [secondaryColor, setSecondaryColor] = useState('#2563eb');
   const [showProfanity, setShowProfanity] = useState(true);
 
-  // Step 5: Directory Sync & Clean Production Workspace
+  // Step 5: Directory Sync, Central Server Runner & Clean Production Workspace
   const [initialSyncAD, setInitialSyncAD] = useState(false);
   const [clearWorkspace, setClearWorkspace] = useState(true);
+  const [setupCentralRunner, setSetupCentralRunner] = useState(false);
+  const [runnerServerUrl, setRunnerServerUrl] = useState(() =>
+    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'
+  );
+  const [runnerPollInterval, setRunnerPollInterval] = useState<number>(30);
+  const [runnerSetupMode, setRunnerSetupMode] = useState<'service' | 'interactive'>('service');
+  const [useDelegatedServiceAccount, setUseDelegatedServiceAccount] = useState(false);
+  const [runnerServiceUsername, setRunnerServiceUsername] = useState('svc_fdim_runner');
+  const [runnerServiceDomain, setRunnerServiceDomain] = useState('');
+  const [openRunnerAfterSetup, setOpenRunnerAfterSetup] = useState(true);
+  const [copiedRunnerCmd, setCopiedRunnerCmd] = useState(false);
+  const [isCheckingRunner, setIsCheckingRunner] = useState(false);
+  const [runnerStatusResult, setRunnerStatusResult] = useState<{
+    checked: boolean;
+    active: boolean;
+    hostname?: string;
+    ipAddress?: string;
+  } | null>(null);
 
   if (!isOpen) return null;
 
@@ -186,6 +209,41 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
     }
   };
 
+  const handleCheckRunnerStatus = async () => {
+    setIsCheckingRunner(true);
+    try {
+      const res = await fetch('/api/server-runner/status');
+      if (res.ok) {
+        const data = await res.json();
+        setRunnerStatusResult({
+          checked: true,
+          active: Boolean(data.active),
+          hostname: data.runner?.hostname,
+          ipAddress: data.runner?.ipAddress,
+        });
+      } else {
+        setRunnerStatusResult({ checked: true, active: false });
+      }
+    } catch {
+      setRunnerStatusResult({ checked: true, active: false });
+    } finally {
+      setIsCheckingRunner(false);
+    }
+  };
+
+  const sanitizedRunnerUrl = (runnerServerUrl || 'http://localhost:3000').trim().replace(/\/+$/, '');
+  const runnerEndpointPath =
+    runnerSetupMode === 'service'
+      ? `/api/server-runner/install-service?serverUrl=${encodeURIComponent(sanitizedRunnerUrl)}&interval=${runnerPollInterval}`
+      : `/api/server-runner/script?serverUrl=${encodeURIComponent(sanitizedRunnerUrl)}&interval=${runnerPollInterval}`;
+  const runnerOneLiner = `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}; $s = Invoke-RestMethod -Uri '${sanitizedRunnerUrl}${runnerEndpointPath}' -UseBasicParsing; Invoke-Expression $s`;
+
+  const handleCopyRunnerOneLiner = () => {
+    navigator.clipboard.writeText(runnerOneLiner);
+    setCopiedRunnerCmd(true);
+    setTimeout(() => setCopiedRunnerCmd(false), 2000);
+  };
+
   const handleCompleteSetup = async () => {
     setIsSubmitting(true);
     setErrorMsg(null);
@@ -236,6 +294,14 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
           : null,
         initialSyncAD: initialSyncAD && Boolean(adLdapUrl.trim()),
         clearWorkspace,
+        centralRunnerConfig: {
+          enabled: setupCentralRunner,
+          serverUrl: sanitizedRunnerUrl,
+          pollIntervalSec: runnerPollInterval,
+          useDelegatedServiceAccount,
+          serviceAccountUsername: runnerServiceUsername,
+          serviceAccountDomain: runnerServiceDomain || adDomain.trim(),
+        },
       };
 
       const res = await fetch('/api/setup/initialize', {
@@ -270,7 +336,8 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
         data.appSettings,
         data.discoveredComputersCount,
         data.ldapSyncWarning,
-        initialSyncAD && Boolean(adLdapUrl.trim())
+        initialSyncAD && Boolean(adLdapUrl.trim()),
+        setupCentralRunner && openRunnerAfterSetup
       );
     } catch (err: any) {
       setErrorMsg(err.message || 'Error initializing FDIM Suite configuration.');
@@ -320,7 +387,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
               { num: 2, label: 'Master Admin' },
               { num: 3, label: 'Active Directory' },
               { num: 4, label: 'Organization' },
-              { num: 5, label: 'Sync & Launch' },
+              { num: 5, label: 'Runner & Launch' },
             ].map((step) => {
               const isPassed = currentStep > step.num;
               const isCurrent = currentStep === step.num;
@@ -979,6 +1046,200 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({
                     )}
                   </p>
                 </div>
+              </div>
+
+              {/* Optional Central Server Runner Setup (Zero-Agent WinRM) */}
+              <div className="rounded-2xl bg-slate-950 border border-indigo-800/60 overflow-hidden">
+                <div className="p-4 flex items-start space-x-3">
+                  <input
+                    type="checkbox"
+                    id="setupCentralRunnerCheck"
+                    checked={setupCentralRunner}
+                    onChange={(e) => setSetupCentralRunner(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-700 text-indigo-500 focus:ring-indigo-500 bg-slate-900 w-4 h-4 cursor-pointer"
+                  />
+                  <div className="flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label htmlFor="setupCentralRunnerCheck" className="text-xs font-bold text-white cursor-pointer flex items-center space-x-2">
+                        <span>Set up Central Server Runner (Zero-Agent WinRM Orchestrator)</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800 font-mono">
+                          Optional
+                        </span>
+                      </label>
+                      {runnerStatusResult?.checked && (
+                        <span
+                          className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold border ${
+                            runnerStatusResult.active
+                              ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                              : 'bg-amber-950 text-amber-300 border-amber-800'
+                          }`}
+                        >
+                          {runnerStatusResult.active
+                            ? `Runner Online (${runnerStatusResult.hostname || 'Connected'})`
+                            : 'Runner Not Connected Yet'}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                      Deploy the central daemon on a domain-joined Windows Server or jump host so FDIM can dispatch software &amp; configuration tasks over WinRM without pre-installing agents on client PCs.
+                    </p>
+                  </div>
+                </div>
+
+                {setupCentralRunner && (
+                  <div className="px-4 pb-4 pt-3 border-t border-slate-800/80 bg-slate-900/40 space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="md:col-span-2">
+                        <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                          FDIM Server URL (Reachable from Management Server)
+                        </label>
+                        <input
+                          type="text"
+                          value={runnerServerUrl}
+                          onChange={(e) => setRunnerServerUrl(e.target.value)}
+                          placeholder="http://fdim-server:3000"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-cyan-300 focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                          Queue Poll Interval
+                        </label>
+                        <select
+                          value={runnerPollInterval}
+                          onChange={(e) => setRunnerPollInterval(parseInt(e.target.value, 10))}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value={15}>Every 15 Seconds</option>
+                          <option value={30}>Every 30 Seconds (Recommended)</option>
+                          <option value={60}>Every 60 Seconds</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Optional Delegated Service Account */}
+                    <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
+                      <label className="flex items-center space-x-2 text-xs font-semibold text-slate-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={useDelegatedServiceAccount}
+                          onChange={(e) => setUseDelegatedServiceAccount(e.target.checked)}
+                          className="rounded border-slate-700 text-indigo-500 bg-slate-900"
+                        />
+                        <span>Enable Delegated Runner Service Account for Helpdesk Execution</span>
+                      </label>
+
+                      {useDelegatedServiceAccount && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                          <div>
+                            <label className="block text-[10px] text-slate-400 mb-1">Service Account Username</label>
+                            <input
+                              type="text"
+                              value={runnerServiceUsername}
+                              onChange={(e) => setRunnerServiceUsername(e.target.value)}
+                              placeholder="svc_fdim_runner"
+                              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-400 mb-1">Domain (NetBIOS)</label>
+                            <input
+                              type="text"
+                              value={runnerServiceDomain || adDomain}
+                              onChange={(e) => setRunnerServiceDomain(e.target.value.toUpperCase())}
+                              placeholder="CORP"
+                              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-100 uppercase focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Bootstrap Mode & PowerShell 1-Liner */}
+                    <div className="space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => setRunnerSetupMode('service')}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+                              runnerSetupMode === 'service'
+                                ? 'bg-indigo-600 text-white'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            24/7 Scheduled Task (SYSTEM)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRunnerSetupMode('interactive')}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+                              runnerSetupMode === 'interactive'
+                                ? 'bg-slate-800 text-white'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            Interactive Console
+                          </button>
+                        </div>
+
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={handleCheckRunnerStatus}
+                            disabled={isCheckingRunner}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-semibold flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${isCheckingRunner ? 'animate-spin' : ''}`} />
+                            <span>{isCheckingRunner ? 'Checking...' : 'Check Runner Status'}</span>
+                          </button>
+                          <a
+                            href={`${sanitizedRunnerUrl}${runnerEndpointPath}`}
+                            download={runnerSetupMode === 'service' ? 'Install-FDIM-ServerRunner.ps1' : 'FDIM-ServerRunner.ps1'}
+                            className="px-2.5 py-1 rounded-lg bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-800 text-[11px] font-semibold flex items-center space-x-1"
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>Download .ps1</span>
+                          </a>
+                        </div>
+                      </div>
+
+                      <div className="relative">
+                        <pre className="bg-slate-950 border border-slate-800 rounded-xl p-3 pr-28 text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap leading-relaxed select-all">
+                          {runnerOneLiner}
+                        </pre>
+                        <button
+                          type="button"
+                          onClick={handleCopyRunnerOneLiner}
+                          className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold border border-slate-700 flex items-center space-x-1 cursor-pointer"
+                        >
+                          {copiedRunnerCmd ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-400" />
+                              <span className="text-emerald-400">Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-cyan-400" />
+                              <span>Copy 1-Liner</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      <label className="flex items-center space-x-2 text-[11px] text-slate-300 cursor-pointer pt-1">
+                        <input
+                          type="checkbox"
+                          checked={openRunnerAfterSetup}
+                          onChange={(e) => setOpenRunnerAfterSetup(e.target.checked)}
+                          className="rounded border-slate-700 text-indigo-500 bg-slate-900"
+                        />
+                        <span>Open the <strong>Central Server Runner</strong> cockpit immediately after completing setup</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -37,18 +37,30 @@ import {
   ArrowRight,
   ExternalLink,
   Code2,
+  Trash2,
 } from 'lucide-react';
 
 interface ClientAgentQueueViewProps {
   customers: CustomerProfile[];
   packages: SoftwarePackage[];
+  initialSubTab?: 'live-logs' | 'server-runner' | 'queue' | 'agents';
 }
 
 export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
   customers,
   packages,
+  initialSubTab,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'live-logs' | 'server-runner' | 'queue' | 'agents'>('live-logs');
+  const [activeSubTab, setActiveSubTab] = useState<'live-logs' | 'server-runner' | 'queue' | 'agents'>(
+    initialSubTab || 'live-logs'
+  );
+
+  useEffect(() => {
+    if (initialSubTab) {
+      setActiveSubTab(initialSubTab);
+    }
+  }, [initialSubTab]);
+
   const [tasks, setTasks] = useState<QueuedTask[]>([]);
   const [computers, setComputers] = useState<ADComputer[]>([]);
   const [serverRunner, setServerRunner] = useState<ServerRunnerInfo | null>(null);
@@ -121,21 +133,70 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
     return () => clearInterval(timer);
   }, []);
 
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [taskActionError, setTaskActionError] = useState<string | null>(null);
+
   const handleCancelTask = async (id: string) => {
+    setTaskActionError(null);
     try {
-      await fetch(`/api/agent/tasks/${id}/cancel`, { method: 'POST' });
+      const res = await fetch(`/api/agent/tasks/${id}/cancel`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to cancel task');
       fetchData();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error cancelling task:', err);
+      setTaskActionError(err?.message || 'Could not cancel task.');
     }
   };
 
   const handleRetryTask = async (id: string) => {
+    setTaskActionError(null);
     try {
-      await fetch(`/api/agent/tasks/${id}/retry`, { method: 'POST' });
+      const res = await fetch(`/api/agent/tasks/${id}/retry`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to retry task');
       fetchData();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error retrying task:', err);
+      setTaskActionError(err?.message || 'Could not retry task.');
+    }
+  };
+
+  const handleDeleteTask = async (id: string) => {
+    setTaskActionError(null);
+    setDeletingTaskId(id);
+    try {
+      const res = await fetch(`/api/agent/tasks/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to delete task');
+      }
+      setTasks((prev) => prev.filter((t) => t.id !== id));
+      fetchData();
+    } catch (err: any) {
+      console.error('Error deleting task:', err);
+      setTaskActionError(err?.message || 'Could not delete task.');
+    } finally {
+      setDeletingTaskId(null);
+    }
+  };
+
+  const handleClearFailedAndCancelled = async () => {
+    setTaskActionError(null);
+    setIsBulkDeleting(true);
+    try {
+      const res = await fetch('/api/agent/tasks/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ statuses: ['failed', 'cancelled'] }),
+      });
+      if (!res.ok) throw new Error('Failed to clear inactive tasks');
+      setTasks((prev) => prev.filter((t) => t.status !== 'failed' && t.status !== 'cancelled'));
+      fetchData();
+    } catch (err: any) {
+      console.error('Error clearing failed/cancelled tasks:', err);
+      setTaskActionError(err?.message || 'Could not clear failed/cancelled tasks.');
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -621,14 +682,41 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
       {activeSubTab === 'queue' && (
         <div className="space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+            <div className="p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 bg-slate-950/60">
               <div className="flex items-center space-x-2">
                 <span className="text-xs font-bold text-slate-300">Background Wait-Tasks Dispatcher</span>
                 <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">
                   Auto-executes when offline PCs boot & reach LAN
                 </span>
               </div>
+
+              {tasks.some((t) => t.status === 'failed' || t.status === 'cancelled') && (
+                <button
+                  onClick={handleClearFailedAndCancelled}
+                  disabled={isBulkDeleting}
+                  className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-red-950/70 hover:bg-red-900/80 text-red-300 border border-red-800/60 text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                  title="Delete all failed and cancelled tasks"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isBulkDeleting ? 'Clearing...' : 'Clear Failed / Cancelled'}</span>
+                </button>
+              )}
             </div>
+
+            {taskActionError && (
+              <div className="mx-4 mt-3 p-2.5 rounded-xl bg-red-950/80 border border-red-800/80 text-red-200 text-xs flex items-center justify-between">
+                <span className="flex items-center space-x-2">
+                  <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                  <span>{taskActionError}</span>
+                </span>
+                <button
+                  onClick={() => setTaskActionError(null)}
+                  className="text-red-300 hover:text-white text-[11px] font-semibold px-2 cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
@@ -747,11 +835,11 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
 
                           {/* Actions */}
                           <td className="py-3 px-4 text-right">
-                            <div className="flex items-center justify-end space-x-1">
+                            <div className="flex items-center justify-end space-x-1.5">
                               {task.status === 'queued' && (
                                 <button
                                   onClick={() => handleCancelTask(task.id)}
-                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-red-950 hover:text-red-400 text-slate-400 text-xs transition-colors"
+                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-amber-950 hover:text-amber-300 text-slate-400 text-xs transition-colors cursor-pointer"
                                   title="Cancel queued task"
                                 >
                                   <XCircle className="w-3.5 h-3.5" />
@@ -760,10 +848,26 @@ export const ClientAgentQueueView: React.FC<ClientAgentQueueViewProps> = ({
                               {(task.status === 'failed' || task.status === 'cancelled') && (
                                 <button
                                   onClick={() => handleRetryTask(task.id)}
-                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-emerald-950 hover:text-emerald-400 text-slate-400 text-xs transition-colors"
+                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-emerald-950 hover:text-emerald-400 text-slate-400 text-xs transition-colors cursor-pointer"
                                   title="Retry task"
                                 >
                                   <RotateCcw className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {(task.status === 'queued' ||
+                                task.status === 'dispatching' ||
+                                task.status === 'failed' ||
+                                task.status === 'cancelled' ||
+                                task.status === 'completed') && (
+                                <button
+                                  onClick={() => handleDeleteTask(task.id)}
+                                  disabled={deletingTaskId === task.id}
+                                  className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-red-950/90 hover:text-red-300 border border-slate-700 hover:border-red-800/70 text-slate-400 text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                                  title="Delete task from queue"
+                                  aria-label={`Delete task ${task.title}`}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Delete</span>
                                 </button>
                               )}
                             </div>

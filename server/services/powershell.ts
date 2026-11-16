@@ -1415,7 +1415,7 @@ Write-Host "Downloading FDIM Central Server Runner script..." -ForegroundColor C
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true} } catch {}
 
-$runnerScript = Invoke-RestMethod -Uri "$ServerUrl/api/server-runner/script" -UseBasicParsing
+$runnerScript = Invoke-RestMethod -Uri "$ServerUrl/api/server-runner/script?interval=${pollIntervalSec}" -UseBasicParsing
 Set-Content -Path $ScriptPath -Value $runnerScript -Encoding UTF8 -Force
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$ScriptPath\`""

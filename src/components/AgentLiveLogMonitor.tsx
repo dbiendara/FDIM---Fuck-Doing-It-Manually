@@ -55,7 +55,7 @@ export const AgentLiveLogMonitor: React.FC<AgentLiveLogMonitorProps> = ({
   const [pollIntervalMs, setPollIntervalMs] = useState<number>(2000);
 
   // Simulation customizer modal / popover
-  const [simMachine, setSimMachine] = useState<string>(() => computers[0]?.name || 'CSPC03');
+  const [simMachine, setSimMachine] = useState<string>(() => computers[0]?.name || 'DEMO-WS-01');
   const [simPackage, setSimPackage] = useState<string>(() => packages[0]?.name || '7-Zip Enterprise 24.08');
   const [simInstallerType, setSimInstallerType] = useState<string>('MSI');
   const [simArgs, setSimArgs] = useState<string>('/qn /norestart');

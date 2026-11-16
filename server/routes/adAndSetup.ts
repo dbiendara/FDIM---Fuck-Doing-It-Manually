@@ -187,6 +187,7 @@ adAndSetupRouter.post('/setup/initialize', async (req, res) => {
       defaultCustomer,
       initialSyncAD,
       clearWorkspace,
+      centralRunnerConfig,
     } = req.body || {};
 
     if (!adminUser || !adminUser.username) {
@@ -236,6 +237,21 @@ adAndSetupRouter.post('/setup/initialize', async (req, res) => {
       derivedFqdnFromBaseDn ||
       (netbiosDomain ? `${netbiosDomain.toLowerCase()}.local` : 'local');
 
+    const currentSettings = getAppSettings();
+    const runnerServerUrl =
+      centralRunnerConfig?.enabled && typeof centralRunnerConfig?.serverUrl === 'string'
+        ? centralRunnerConfig.serverUrl.trim().replace(/\/+$/, '')
+        : currentSettings.agentConfig?.serverUrl || '';
+
+    const runnerServiceUpdate =
+      centralRunnerConfig?.enabled && centralRunnerConfig?.useDelegatedServiceAccount
+        ? {
+            enabled: true,
+            username: (centralRunnerConfig.serviceAccountUsername || currentSettings.runnerServiceAccount?.username || 'Administrator').trim(),
+            domain: (centralRunnerConfig.serviceAccountDomain || netbiosDomain || currentSettings.runnerServiceAccount?.domain || '').trim(),
+          }
+        : undefined;
+
     updateAppSettings({
       initialSetupCompleted: true,
       setupCompletedAt: new Date().toISOString(),
@@ -251,6 +267,22 @@ adAndSetupRouter.post('/setup/initialize', async (req, res) => {
         adminGroup: (adConfig?.adminGroup || 'Domain Admins').trim(),
         computerSearchOu: (adConfig?.computerSearchOu || baseDn).trim(),
       },
+      ...(runnerServerUrl
+        ? {
+            agentConfig: {
+              ...currentSettings.agentConfig,
+              serverUrl: runnerServerUrl,
+            },
+          }
+        : {}),
+      ...(runnerServiceUpdate
+        ? {
+            runnerServiceAccount: {
+              ...currentSettings.runnerServiceAccount,
+              ...runnerServiceUpdate,
+            },
+          }
+        : {}),
       corporateColors: {
         primaryColor: companyBrand?.primaryColor || '#06b6d4',
         secondaryColor: companyBrand?.secondaryColor || '#2563eb',
